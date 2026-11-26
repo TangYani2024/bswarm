@@ -1,0 +1,60 @@
+{
+  "providers": {
+    "deepseek": {
+      "url": "https://api.deepseek.com/v1",
+      "wire_protocol": "openai",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "default_model": "deepseek-chat",
+      "models": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ],
+      "max_concurrency": 0,
+      "timeout": "15m",
+      "idle_timeout": "90s"
+    },
+    "openai-compatible": {
+      "url": "https://your-openai-endpoint.example/v1",
+      "wire_protocol": "openai",
+      "api_key_env": "CUSTOM_OPENAI_API_KEY",
+      "default_model": "model-a",
+      "models": [
+        "model-a",
+        "model-b"
+      ],
+      "max_concurrency": 0
+    },
+    "gemini-gateway": {
+      "url": "https://your-gemini-gateway.example",
+      "wire_protocol": "gemini",
+      "api_key_env": "CUSTOM_GEMINI_API_KEY",
+      "default_model": "gemini-2.5-flash",
+      "models": [
+        "gemini-2.5-flash"
+      ],
+      "max_concurrency": 0
+    },
+    "rate-limited-aggregator": {
+      "url": "https://your-aggregator.example/v1",
+      "wire_protocol": "openai",
+      "api_key_file": "~/.config/bswarm/aggregator.key",
+      "api_key_line": 1,
+      "models": [
+        "vendor-a/fast-model",
+        "vendor-b/fast-model",
+        "vendor-c/fast-model"
+      ],
+      "concurrency_scope": "prefix:/",
+      "max_concurrency": 1,
+      "timeout": "10m",
+      "idle_timeout": "90s"
+    }
+  },
+  "pools": {
+    "fast-pool": [
+      "rate-limited-aggregator:vendor-a/fast-model",
+      "rate-limited-aggregator:vendor-b/fast-model",
+      "rate-limited-aggregator:vendor-c/fast-model"
+    ]
+  }
+}

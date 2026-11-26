@@ -1,0 +1,9 @@
+/bin/bswarm
+/bin/bswarm.exe
+/bin/bswarm-*
+providers.json
+*.local.json
+*.key
+.env
+*.tmp
+swarm_probe_report.md

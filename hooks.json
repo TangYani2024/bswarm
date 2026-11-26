@@ -1,0 +1,42 @@
+{
+  "bswarm-guards": {
+    "PreToolUse": [
+      {
+        "matcher": "edit_file|write_file|write_to_file|replace_file_content|multi_replace_file_content|post_message",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hook.mjs pre-tool-use",
+            "timeout": 4
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "edit_file|write_file|write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hook.mjs post-tool-use",
+            "timeout": 4
+          }
+        ]
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node scripts/hook.mjs pre-invocation",
+        "timeout": 4
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node scripts/hook.mjs stop",
+        "timeout": 4
+      }
+    ]
+  }
+}
