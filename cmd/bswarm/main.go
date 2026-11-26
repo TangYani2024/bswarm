@@ -25,7 +25,7 @@ import (
 	"github.com/TangYani2024/bswarm/internal/watchdog"
 )
 
-const version = "0.2.1"
+const version = "0.3.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -974,7 +974,7 @@ func cmdGatewayRun(args []string) error {
 	if err := gateway.PrepareIsolatedHome(isoHome, n.WorkspacePath, artDir, st.RootDir, pluginDir, spec); err != nil {
 		return orch.CompleteGatewayTurn(context.Background(), tid, nid, tkid, gateway.TurnOutcome{ExitErr: err})
 	}
-	agyBin, err := gateway.ResolveAgyBinary(spec)
+	backend, err := gateway.ResolveWorkerBackend(spec)
 	if err != nil {
 		return orch.CompleteGatewayTurn(context.Background(), tid, nid, tkid, gateway.TurnOutcome{ExitErr: err})
 	}
@@ -986,8 +986,9 @@ func cmdGatewayRun(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	outcome := gateway.RunAgyTurn(ctx, gateway.TurnOpts{
-		AgyBin:          agyBin,
+	outcome := gateway.RunTurn(ctx, backend, gateway.TurnOpts{
+		AgyBin:          backend.Binary,
+		IsoHome:         isoHome,
 		WorkDir:         n.WorkspacePath,
 		Env:             env,
 		Model:           model,

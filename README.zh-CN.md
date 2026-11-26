@@ -37,9 +37,10 @@ ln -sf ~/.gemini/config/plugins/bswarm/bin/bswarm ~/.local/bin/bswarm
 
 ### Antigravity 桌面客户端
 
-官方 Antigravity 桌面客户端同样读取 `~/.gemini/config/plugins/`，原生支持官方子代理、Hooks 与内置 Swarm UI 面板。若未安装 `agy` CLI，可将编译完成的仓库复制或软链至 `~/.gemini/config/plugins/bswarm`，并在 `~/.gemini/config/config.json` 中确保 `"plugins": { "bswarm": { "enabled": true } }`。
+官方 Antigravity 桌面客户端同样读取 `~/.gemini/config/plugins/`，原生支持官方子代理、Hooks、内置 Swarm UI 面板，以及**免装 `agy` CLI 的第三方外部 API 路由**。在未安装 `agy` CLI 的纯桌面环境下，`bswarm` 会自动使用桌面客户端内置的 `language_server` 启动独立隔离的无头进程执行外部模型任务，回合结束后通过 `--exit_on_stdin_close` 自动退出清理。
 
-> 说明：在桌面客户端中调用第三方外部 API（`--provider` / `pool:`）需要本机同时安装 `agy` CLI（桌面客户端内置的 `language_server` 不包含无头 `--output-format stream-json --print` 模式）。
+若未安装 `agy` CLI，可将编译完成的仓库复制或软链至 `~/.gemini/config/plugins/bswarm`，并在 `~/.gemini/config/config.json` 中确保 `"plugins": { "bswarm": { "enabled": true } }`。
+
 > 说明：在终端沙箱中运行时，与本地 Antigravity Language Server（`ANTIGRAVITY_LS_ADDRESS`）通信需要允许环回网络访问（`sandboxAllowNetwork`）。
 
 ## 使用方法

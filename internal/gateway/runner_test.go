@@ -87,6 +87,23 @@ func TestPrepareIsolatedHomeMountsPluginHooks(t *testing.T) {
 	if _, err := os.Stat(mounted); err != nil {
 		t.Fatalf("expected plugin hooks mounted at %s: %v", mounted, err)
 	}
+	// Verify Desktop language_server config.json is also generated with plugin enabled & auto-execution policy.
+	deskRaw, err := os.ReadFile(filepath.Join(iso, ".gemini", "config", "config.json"))
+	if err != nil {
+		t.Fatalf("read desktop config.json: %v", err)
+	}
+	var deskDoc map[string]any
+	if err := json.Unmarshal(deskRaw, &deskDoc); err != nil {
+		t.Fatalf("parse desktop config.json: %v", err)
+	}
+	us, _ := deskDoc["userSettings"].(map[string]any)
+	if us["autoExecutionPolicy"] != "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER" {
+		t.Fatalf("expected CASCADE_COMMANDS_AUTO_EXECUTION_EAGER in desktop config.json, got %#v", us)
+	}
+	plugs, _ := deskDoc["plugins"].(map[string]any)
+	if plugs["bswarm"] == nil {
+		t.Fatalf("expected bswarm enabled in desktop config.json, got %#v", plugs)
+	}
 }
 
 func TestRunAgyTurnIdleTimeoutAndErrorEarlyStop(t *testing.T) {
@@ -177,5 +194,43 @@ func TestResolveAgyBinaryPrefersAgyOverDesktopLanguageServer(t *testing.T) {
 	}
 	if filepath.Clean(got) != filepath.Clean(fakeAgy) {
 		t.Fatalf("expected %q, got %q", fakeAgy, got)
+	}
+}
+
+func TestResolveWorkerBackendFallsBackToDesktopLS(t *testing.T) {
+	tmp := t.TempDir()
+	fakeLS := filepath.Join(tmp, "language_server")
+	if runtime.GOOS == "windows" {
+		fakeLS += ".exe"
+	}
+	if err := os.WriteFile(fakeLS, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BSWARM_AGY_BIN", "")
+	t.Setenv("BSWARM_LS_BIN", "")
+	t.Setenv("BSWARM_GATEWAY_BACKEND", "")
+	t.Setenv("HOME", tmp)
+	t.Setenv("PATH", tmp)
+	t.Setenv("ANTIGRAVITY_AGENTAPI_EXE", fakeLS)
+
+	// 1. Desktop-only (no `agy` installed): ResolveWorkerBackend seamlessly selects desktop-ls!
+	b, err := ResolveWorkerBackend(nil)
+	if err != nil {
+		t.Fatalf("ResolveWorkerBackend failed on Desktop-only env: %v", err)
+	}
+	if b.Kind != BackendDesktopLS || filepath.Clean(b.Binary) != filepath.Clean(fakeLS) {
+		t.Fatalf("expected desktop-ls %q, got %+v", fakeLS, b)
+	}
+
+	// 2. Even when `agy` exists, BSWARM_GATEWAY_BACKEND=desktop-ls forces Desktop LS backend.
+	fakeAgy := filepath.Join(tmp, "agy")
+	if runtime.GOOS == "windows" {
+		fakeAgy += ".exe"
+	}
+	_ = os.WriteFile(fakeAgy, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	t.Setenv("BSWARM_GATEWAY_BACKEND", "desktop-ls")
+	b2, err := ResolveWorkerBackend(nil)
+	if err != nil || b2.Kind != BackendDesktopLS {
+		t.Fatalf("expected forced desktop-ls backend, got %+v err=%v", b2, err)
 	}
 }

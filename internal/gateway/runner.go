@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -41,9 +42,24 @@ type TurnOutcome struct {
 	ExitErr         error
 }
 
-// TurnOpts configures one headless `agy` gateway worker turn.
+// BackendKind selects how bswarm executes an isolated external API worker turn.
+type BackendKind string
+
+const (
+	BackendAgyCLI    BackendKind = "agy-cli"
+	BackendDesktopLS BackendKind = "desktop-ls"
+)
+
+// WorkerBackend describes the resolved runtime binary for external API workers.
+type WorkerBackend struct {
+	Kind   BackendKind
+	Binary string
+}
+
+// TurnOpts configures one headless external gateway worker turn.
 type TurnOpts struct {
 	AgyBin          string
+	IsoHome         string
 	WorkDir         string
 	Env             []string
 	Model           string
@@ -96,6 +112,110 @@ func ResolveAgyBinary(spec *provider.ProviderSpec) (string, error) {
 	return "", errors.New("could not locate `agy` CLI binary required for external API gateway (install `agy` CLI or set BSWARM_AGY_BIN / provider.agy_bin)")
 }
 
+func defaultDesktopLSPaths() []string {
+	var cands []string
+	home, _ := os.UserHomeDir()
+	switch runtime.GOOS {
+	case "darwin":
+		cands = append(cands, "/Applications/Antigravity.app/Contents/Resources/bin/language_server")
+		if home != "" {
+			cands = append(cands, filepath.Join(home, "Applications", "Antigravity.app", "Contents", "Resources", "bin", "language_server"))
+		}
+	case "windows":
+		if localApp := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localApp != "" {
+			cands = append(cands, filepath.Join(localApp, "Programs", "Antigravity", "resources", "bin", "language_server.exe"))
+		}
+		if progFiles := strings.TrimSpace(os.Getenv("ProgramFiles")); progFiles != "" {
+			cands = append(cands, filepath.Join(progFiles, "Antigravity", "resources", "bin", "language_server.exe"))
+		}
+	default:
+		cands = append(cands,
+			"/opt/Antigravity/resources/bin/language_server",
+			"/usr/share/antigravity/resources/bin/language_server",
+			"/usr/lib/antigravity/resources/bin/language_server",
+		)
+		if home != "" {
+			cands = append(cands, filepath.Join(home, ".local", "share", "Antigravity", "resources", "bin", "language_server"))
+		}
+	}
+	return cands
+}
+
+func findDesktopLSBinary(spec *provider.ProviderSpec) string {
+	if spec != nil && strings.TrimSpace(spec.LSBin) != "" {
+		return strings.TrimSpace(spec.LSBin)
+	}
+	if v := strings.TrimSpace(os.Getenv("BSWARM_LS_BIN")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("ANTIGRAVITY_AGENTAPI_EXE")); v != "" && isLanguageServerBinary(v) {
+		if fi, err := os.Stat(v); err == nil && !fi.IsDir() {
+			return v
+		}
+	}
+	for _, cand := range defaultDesktopLSPaths() {
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+			return cand
+		}
+	}
+	return ""
+}
+
+// ResolveWorkerBackend selects the best available backend for external API gateway turns:
+//   - Uses `agy` CLI when explicitly configured or installed.
+//   - Automatically falls back to Antigravity Desktop's bundled `language_server` (zero CLI required!)
+//     when running on Desktop-only machines or when BSWARM_GATEWAY_BACKEND=desktop-ls / provider.ls_bin is set.
+func ResolveWorkerBackend(spec *provider.ProviderSpec) (WorkerBackend, error) {
+	prefer := strings.ToLower(strings.TrimSpace(os.Getenv("BSWARM_GATEWAY_BACKEND")))
+	if prefer == string(BackendDesktopLS) || prefer == "ls" || prefer == "desktop" {
+		if ls := findDesktopLSBinary(spec); ls != "" {
+			return WorkerBackend{Kind: BackendDesktopLS, Binary: ls}, nil
+		}
+		return WorkerBackend{}, errors.New("BSWARM_GATEWAY_BACKEND=desktop-ls requested, but could not locate Antigravity Desktop language_server (set BSWARM_LS_BIN or provider.ls_bin)")
+	}
+	if prefer == string(BackendAgyCLI) || prefer == "agy" || prefer == "cli" {
+		bin, err := ResolveAgyBinary(spec)
+		if err != nil {
+			return WorkerBackend{}, err
+		}
+		return WorkerBackend{Kind: BackendAgyCLI, Binary: bin}, nil
+	}
+
+	// Explicit provider/env binary overrides first.
+	if spec != nil && strings.TrimSpace(spec.AgyBin) != "" {
+		return WorkerBackend{Kind: BackendAgyCLI, Binary: strings.TrimSpace(spec.AgyBin)}, nil
+	}
+	if v := strings.TrimSpace(os.Getenv("BSWARM_AGY_BIN")); v != "" {
+		return WorkerBackend{Kind: BackendAgyCLI, Binary: v}, nil
+	}
+	if spec != nil && strings.TrimSpace(spec.LSBin) != "" {
+		return WorkerBackend{Kind: BackendDesktopLS, Binary: strings.TrimSpace(spec.LSBin)}, nil
+	}
+	if v := strings.TrimSpace(os.Getenv("BSWARM_LS_BIN")); v != "" {
+		return WorkerBackend{Kind: BackendDesktopLS, Binary: v}, nil
+	}
+
+	// Prefer `agy` CLI when present; otherwise seamlessly use Desktop's bundled `language_server`.
+	if bin, err := ResolveAgyBinary(spec); err == nil {
+		return WorkerBackend{Kind: BackendAgyCLI, Binary: bin}, nil
+	}
+	if ls := findDesktopLSBinary(spec); ls != "" {
+		return WorkerBackend{Kind: BackendDesktopLS, Binary: ls}, nil
+	}
+	return WorkerBackend{}, errors.New("could not locate `agy` CLI or Antigravity Desktop `language_server` (install `agy` CLI, install Antigravity Desktop, or set BSWARM_AGY_BIN / BSWARM_LS_BIN)")
+}
+
+// RunTurn dispatches an external gateway turn to either the `agy` CLI or Desktop `language_server` backend.
+func RunTurn(ctx context.Context, backend WorkerBackend, opts TurnOpts) TurnOutcome {
+	if opts.AgyBin == "" {
+		opts.AgyBin = backend.Binary
+	}
+	if backend.Kind == BackendDesktopLS {
+		return RunDesktopLSTurn(ctx, opts)
+	}
+	return RunAgyTurn(ctx, opts)
+}
+
 // ResolvePluginDir locates the bswarm plugin directory containing plugin.json + hooks.json
 // so isolated gateway workers can mount the exact same PreToolUse (--owns) and Stop hooks.
 func ResolvePluginDir(exePath string) string {
@@ -145,10 +265,12 @@ func PrepareIsolatedHome(isoHome, workspacePath, artifactsDir, storeRoot, plugin
 	}
 
 	// Mount bswarm plugin into isolated HOME so PreToolUse (--owns) & Stop hooks fire.
+	mountedPluginName := ""
 	if strings.TrimSpace(pluginDir) != "" {
 		plugParent := filepath.Join(isoHome, ".gemini", "config", "plugins")
 		if err := os.MkdirAll(plugParent, 0o700); err == nil {
-			dst := filepath.Join(plugParent, filepath.Base(pluginDir))
+			mountedPluginName = filepath.Base(pluginDir)
+			dst := filepath.Join(plugParent, mountedPluginName)
 			if _, lerr := os.Lstat(dst); os.IsNotExist(lerr) {
 				_ = os.Symlink(pluginDir, dst)
 			}
@@ -169,7 +291,37 @@ func PrepareIsolatedHome(isoHome, workspacePath, artifactsDir, storeRoot, plugin
 	if err != nil {
 		return err
 	}
-	return store.WriteAtomic(filepath.Join(cliDir, "settings.json"), raw, 0o600)
+	if err := store.WriteAtomic(filepath.Join(cliDir, "settings.json"), raw, 0o600); err != nil {
+		return err
+	}
+
+	// Also write Desktop language_server's config.json so zero-CLI Desktop gateway turns
+	// auto-execute workspace/command tools and enable the mounted bswarm hooks plugin.
+	cfgDir := filepath.Join(isoHome, ".gemini", "config")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		return fmt.Errorf("create isolated config dir: %w", err)
+	}
+	pluginsCfg := map[string]any{}
+	if mountedPluginName != "" {
+		pluginsCfg[mountedPluginName] = map[string]any{"enabled": true}
+	}
+	desktopCfg := map[string]any{
+		"plugins": pluginsCfg,
+		"userSettings": map[string]any{
+			"autoExecutionPolicy":          "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER",
+			"permissionPreset":             "AGENT_PERMISSION_PRESET_TURBO",
+			"nonWorkspaceFileAccessPolicy": "AGENT_SETTING_POLICY_ALLOW",
+			"enableTerminalSandbox":        spec.EffectiveSandbox(),
+			"sandboxAllowNetwork":          spec.SandboxAllowNet,
+			"trustedWorkspaces":            trusted,
+			"permissionGrantsV2Migrated":  true,
+		},
+	}
+	deskRaw, err := json.MarshalIndent(desktopCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return store.WriteAtomic(filepath.Join(cfgDir, "config.json"), deskRaw, 0o600)
 }
 
 // BuildAgyEnv constructs a clean isolated environment for the gateway `agy` subprocess.

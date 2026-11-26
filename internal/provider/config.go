@@ -43,7 +43,8 @@ type ProviderSpec struct {
 	AllowedPermissions []string          `json:"allowed_permissions,omitempty"` // settings.json permissions.allow rules
 	EnableSandbox      *bool             `json:"enable_sandbox,omitempty"`      // default true
 	SandboxAllowNet    bool              `json:"sandbox_allow_network,omitempty"`
-	AgyBin             string            `json:"agy_bin,omitempty"` // override agy binary path
+	AgyBin             string            `json:"agy_bin,omitempty"` // override agy CLI binary path
+	LSBin              string            `json:"ls_bin,omitempty"`  // override Desktop language_server binary path
 }
 
 // ResolvedTarget is the result of resolving --provider / --model flags against Config.

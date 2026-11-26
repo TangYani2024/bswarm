@@ -37,9 +37,10 @@ ln -sf ~/.gemini/config/plugins/bswarm/bin/bswarm ~/.local/bin/bswarm
 
 ### Antigravity Desktop
 
-Official Antigravity Desktop loads plugins from `~/.gemini/config/plugins/` and supports official subagents, hooks, and the built-in Swarm UI board directly. If `agy` CLI is not installed, copy or symlink the built repository to `~/.gemini/config/plugins/bswarm` and ensure `"plugins": { "bswarm": { "enabled": true } }` is present in `~/.gemini/config/config.json`.
+Official Antigravity Desktop loads plugins from `~/.gemini/config/plugins/` and supports official subagents, hooks, the built-in Swarm UI board, and external third-party API providers out of the box without requiring `agy` CLI. When `agy` CLI is not installed, `bswarm` automatically launches an isolated headless instance of Desktop's bundled `language_server` for external API workers (and cleans it up on completion via `--exit_on_stdin_close`).
 
-> Note: Running external third-party API providers (`--provider` / `pool:`) from Antigravity Desktop requires `agy` CLI to be installed alongside Desktop, because Desktop's bundled `language_server` does not implement headless `--output-format stream-json --print`.
+To install on Desktop without `agy` CLI, copy or symlink the built repository to `~/.gemini/config/plugins/bswarm` and ensure `"plugins": { "bswarm": { "enabled": true } }` is present in `~/.gemini/config/config.json`.
+
 > Note: Communication with the local Antigravity Language Server (`ANTIGRAVITY_LS_ADDRESS`) requires loopback network access when running inside a terminal sandbox (`sandboxAllowNetwork`).
 
 ## Usage
