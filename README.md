@@ -1,5 +1,7 @@
 # bswarm
 
+English | [简体中文](README.zh-CN.md)
+
 `bswarm` is a zero-MCP, single-binary Go plugin for Google Antigravity that provides hierarchical multi-agent orchestration. It supports official Antigravity models out of the box and optionally routes subagents to any OpenAI- or Gemini-compatible external API with hot-reloaded configuration.
 
 ## Features
@@ -15,6 +17,8 @@
 ## Build and Install
 
 Requires Go >= 1.22 and Node.js.
+
+> Recommendation: Before enabling this plugin, disable any previously installed original swarm plugin (run `agy plugin list` and `agy plugin disable <plugin-name>`, and replace any old `bswarm` symlink on `PATH`) to prevent skill, hook, or command conflicts.
 
 ```bash
 git clone https://github.com/TangYani2024/bswarm.git
