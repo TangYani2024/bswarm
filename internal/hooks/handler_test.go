@@ -171,8 +171,8 @@ func TestHookEnvFallbackForIsolatedGatewayWorkers(t *testing.T) {
 		CWD:            repo,
 		ToolCall:       &ToolCallPayload{Name: "write_file", Args: map[string]any{"Path": filepath.Join(repo, "server/secret.go")}},
 	})
-	if out, ok := deny.(*PreToolOutput); !ok || out.Decision != "deny" {
-		t.Fatalf("expected --owns deny via env fallback for isolated gateway worker, got %#v", deny)
+	if out, ok := deny.(*PreToolOutput); !ok || out.Decision != "deny" || !strings.Contains(out.Reason, "artifacts dir") {
+		t.Fatalf("expected --owns deny with artifacts dir tip via env fallback, got %#v", deny)
 	}
 
 	stopRes := h.HandleStop(&HookInput{ConversationID: "unbound-gw-conv", TerminationReason: "NO_TOOL_CALL"})

@@ -197,3 +197,111 @@ func TestWatchdogHotReloadsProvidersAndPromotesPool(t *testing.T) {
 		t.Fatalf("expected w2 running on hot-added p2:m2, got %+v", updated.Nodes["w2"])
 	}
 }
+
+func TestWatchdogMidStallNudgeHookDenyLoopAndHungGatewayKill(t *testing.T) {
+	dir := t.TempDir()
+	appData := filepath.Join(dir, "appdata")
+	st := store.New(filepath.Join(dir, "store"))
+	cfgPath := filepath.Join(dir, "providers.json")
+	t.Setenv("BSWARM_PROVIDERS_FILE", cfgPath)
+	if err := os.WriteFile(cfgPath, []byte(`{
+		"providers": {"p1": {"url":"https://p1.example/v1","models":["m1"],"max_concurrency":1}},
+		"pools": {"p": ["p1:m1"]}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	tr := &store.Tree{
+		Version: 1, ID: "tw-anti-hang", RepoRoot: dir, AppDataDir: appData, MaxDepth: 3, MaxActive: 12,
+		Nodes: map[string]*store.Node{
+			"root":    {ID: "root", Role: "coordinator", ConversationID: "conv-root", Depth: 0, State: store.NodeWorking, CreatedAt: now, UpdatedAt: now},
+			"w-nudge": {ID: "w-nudge", Role: "analyst", ParentID: "root", ConversationID: "conv-nudge", Depth: 1, State: store.NodeWorking, CurrentTaskID: "t1", CreatedAt: now.Add(-4 * time.Minute), UpdatedAt: now.Add(-4 * time.Minute)},
+			"w-loop":  {ID: "w-loop", Role: "analyst", ParentID: "root", ConversationID: "conv-loop", Depth: 1, State: store.NodeWorking, CurrentTaskID: "t2", CreatedAt: now.Add(-1 * time.Minute), UpdatedAt: now.Add(-1 * time.Minute)},
+			"w-gw1":   {ID: "w-gw1", Role: "worker", ParentID: "root", Provider: "p1", ProviderModel: "m1", Model: "p1:m1", Pool: "p", ConcurrencyKey: "p1", WorkerPID: 999999, Depth: 1, State: store.NodeWorking, CurrentTaskID: "t3", CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute)},
+			"w-gw2":   {ID: "w-gw2", Role: "worker", ParentID: "root", Model: "pool:p", Pool: "p", Depth: 1, State: store.NodeQueued, CurrentTaskID: "t4", CreatedAt: now, UpdatedAt: now},
+		},
+		Tasks: map[string]*store.Task{
+			"t1": {ID: "t1", AssigneeID: "w-nudge", CreatedBy: "root", Goal: "g1", State: store.TaskRunning, CreatedAt: now, UpdatedAt: now},
+			"t2": {ID: "t2", AssigneeID: "w-loop", CreatedBy: "root", Goal: "g2", State: store.TaskRunning, CreatedAt: now, UpdatedAt: now},
+			"t3": {ID: "t3", AssigneeID: "w-gw1", CreatedBy: "root", Goal: "g3", State: store.TaskRunning, CreatedAt: now, UpdatedAt: now},
+			"t4": {ID: "t4", AssigneeID: "w-gw2", CreatedBy: "root", Goal: "g4", State: store.TaskQueued, CreatedAt: now, UpdatedAt: now},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.CreateTree(tr); err != nil {
+		t.Fatal(err)
+	}
+
+	// w-nudge: PLANNER_RESPONSE/DONE idle for 3m (past 2m30s nudge, under 5m stall) -> should nudge child once.
+	trNudge := filepath.Join(appData, "brain", "conv-nudge", ".system_generated", "logs", "transcript.jsonl")
+	_ = os.MkdirAll(filepath.Dir(trNudge), 0o755)
+	_ = os.WriteFile(trNudge, []byte(`{"type":"PLANNER_RESPONSE","status":"DONE"}`+"\n"), 0o644)
+	nudgeTime := now.Add(-3 * time.Minute)
+	_ = os.Chtimes(trNudge, nudgeTime, nudgeTime)
+
+	// w-loop: 2 consecutive pre-tool hook denials 20s ago -> early-alert parent without waiting 5m.
+	trLoop := filepath.Join(appData, "brain", "conv-loop", ".system_generated", "logs", "transcript.jsonl")
+	_ = os.MkdirAll(filepath.Dir(trLoop), 0o755)
+	_ = os.WriteFile(trLoop, []byte(
+		`{"type":"GENERIC","status":"ERROR","error":"tool call denied by pre-tool hook: [bswarm] outside owned scope"}`+"\n"+
+			`{"type":"GENERIC","status":"ERROR","error":"tool call denied by pre-tool hook: [bswarm] outside owned scope"}`+"\n",
+	), 0o644)
+	loopTime := now.Add(-20 * time.Second)
+	_ = os.Chtimes(trLoop, loopTime, loopTime)
+
+	// w-gw1: hung gateway log stalled >5m -> kill worker pid, fail t3, release slot, promote w-gw2.
+	gwLog := filepath.Join(dir, "w-gw1.jsonl")
+	_ = os.WriteFile(gwLog, []byte(`{"event":"init"}`+"\n"), 0o644)
+	gwOld := now.Add(-8 * time.Minute)
+	_ = os.Chtimes(gwLog, gwOld, gwOld)
+	_, _ = st.UpdateTree("tw-anti-hang", func(tree *store.Tree) error {
+		tree.Nodes["w-gw1"].WorkerLog = gwLog
+		// Set WorkerPID to current PID so gateway.ProcessAlive returns true; KillWorker is mocked!
+		tree.Nodes["w-gw1"].WorkerPID = os.Getpid()
+		return nil
+	})
+
+	spy := &spyAPI{}
+	reloader := provider.NewReloader(dir, st.RootDir)
+	wd := New(st, spy, Config{
+		TreeID:       "tw-anti-hang",
+		AppDataDir:   appData,
+		StallTimeout: 5 * time.Minute,
+	})
+	wd.Now = func() time.Time { return now }
+	wd.ProviderReloader = reloader
+	var killed []int
+	wd.KillWorker = func(pid int) { killed = append(killed, pid) }
+	var promoted []string
+	wd.Orch.GatewayLaunch = func(req gateway.LaunchRequest) error {
+		promoted = append(promoted, req.NodeID)
+		return nil
+	}
+
+	rep1, err := wd.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("Tick 1: %v", err)
+	}
+	if rep1.NudgesSent != 1 {
+		t.Fatalf("expected 1 nudge for w-nudge, got %+v", rep1)
+	}
+	if rep1.KilledWorkers != 1 || len(killed) != 1 {
+		t.Fatalf("expected 1 killed hung gateway worker, got rep=%+v killed=%v", rep1, killed)
+	}
+	if rep1.AlertsSent != 2 {
+		t.Fatalf("expected 2 alerts (w-loop + w-gw1), got rep=%+v sent=%+v", rep1, spy.sent)
+	}
+	if rep1.Promoted != 1 || len(promoted) != 1 || promoted[0] != "w-gw2" {
+		t.Fatalf("expected queued w-gw2 promoted after killing hung w-gw1, got rep=%+v promoted=%v", rep1, promoted)
+	}
+
+	// Tick 2: must NOT duplicate nudge or alerts.
+	rep2, err := wd.Tick(context.Background())
+	if err != nil {
+		t.Fatalf("Tick 2: %v", err)
+	}
+	if rep2.NudgesSent != 0 || rep2.AlertsSent != 0 || rep2.KilledWorkers != 0 {
+		t.Fatalf("expected zero duplicates on Tick 2, got %+v", rep2)
+	}
+}

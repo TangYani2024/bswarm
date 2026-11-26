@@ -37,7 +37,7 @@ func BuildSpawnPrompt(t *store.Tree, n *store.Node, tk *store.Task, artifactsDir
 		fmt.Fprintf(&b, "Required verify command: %s\n", tk.VerifyCmd)
 	}
 	b.WriteString("\nRules:\n")
-	b.WriteString("1. Pass-by-reference: write long reports/logs/diffs to a file in your Artifacts dir; keep messages <= 400 chars.\n")
+	b.WriteString("1. Pass-by-reference: write long reports/logs/diffs to your Artifacts dir above (always writable even with --owns); keep messages <= 400 chars.\n")
 	if n.Depth < t.MaxDepth {
 		fmt.Fprintf(&b, "2. You may delegate sub-pieces via `%s spawn` (your children report only to you; integrate before reporting up).\n", bin)
 	} else {
@@ -45,6 +45,7 @@ func BuildSpawnPrompt(t *store.Tree, n *store.Node, tk *store.Task, artifactsDir
 	}
 	fmt.Fprintf(&b, "3. When finished, run `%s done --summary \"<concise result>\" [--artifact <path>]`, then end your turn (0-token idle for reuse).\n", bin)
 	fmt.Fprintf(&b, "4. If blocked on a decision from your parent, run `%s ask parent --summary \"<question>\"` and end your turn.\n", bin)
+	b.WriteString("5. Guard against hangs: wrap heavy scans/builds/network commands with a timeout (e.g. `timeout 60s ...`) and switch to a lighter method if a command stalls.\n")
 	return b.String()
 }
 

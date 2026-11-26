@@ -148,3 +148,34 @@ func TestRunAgyTurnIdleTimeoutAndErrorEarlyStop(t *testing.T) {
 		t.Fatalf("error early-stop took too long: %v", elapsed2)
 	}
 }
+
+func TestResolveAgyBinaryPrefersAgyOverDesktopLanguageServer(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("BSWARM_AGY_BIN", "")
+	t.Setenv("HOME", tmp)
+	t.Setenv("ANTIGRAVITY_AGENTAPI_EXE", filepath.Join(tmp, "resources", "bin", "language_server"))
+
+	// 1. Desktop-only (no `agy` on PATH or ~/.local/bin): must reject language_server with clear guidance.
+	t.Setenv("PATH", tmp)
+	if got, err := ResolveAgyBinary(nil); err == nil {
+		t.Fatalf("expected error when only Desktop language_server exists, got %q", got)
+	} else if !strings.Contains(err.Error(), "language_server") || !strings.Contains(err.Error(), "agy") {
+		t.Fatalf("expected actionable Desktop error, got: %v", err)
+	}
+
+	// 2. Desktop + CLI installed: must pick real `agy` ahead of ANTIGRAVITY_AGENTAPI_EXE.
+	fakeAgy := filepath.Join(tmp, "agy")
+	if runtime.GOOS == "windows" {
+		fakeAgy += ".exe"
+	}
+	if err := os.WriteFile(fakeAgy, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveAgyBinary(nil)
+	if err != nil {
+		t.Fatalf("ResolveAgyBinary failed when agy on PATH: %v", err)
+	}
+	if filepath.Clean(got) != filepath.Clean(fakeAgy) {
+		t.Fatalf("expected %q, got %q", fakeAgy, got)
+	}
+}

@@ -25,7 +25,7 @@ import (
 	"github.com/TangYani2024/bswarm/internal/watchdog"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -108,7 +108,7 @@ Commands:
   providers  [--tree id] [--json]
   gc         [--tree id] [--native-audit] [--apply] [--older-than 7d] [--json]
   sync-ui    [--tree id]
-  watch      --tree <tree_id> [--poll 15s] [--stall 10m] [--idle-exit 3m]
+  watch      --tree <tree_id> [--poll 3s] [--stall 5m] [--nudge 2m30s] [--idle-exit 3m]
   hook       <pre-tool-use|post-tool-use|pre-invocation|stop>
 `)
 }
@@ -179,6 +179,7 @@ func cmdInit(args []string) error {
 		RepoRoot:       *repo,
 		MaxDepth:       *maxDepth,
 		MaxActive:      *maxActive,
+		UpdateIfIdle:   true,
 	})
 	if err != nil {
 		return err
@@ -191,7 +192,15 @@ func cmdInit(args []string) error {
 	if !created {
 		verb = "Using existing"
 	}
-	writeOut(fmt.Sprintf("%s tree %s (max_depth=%d, max_active=%d, repo=%s)\n", verb, t.ID, t.MaxDepth, t.MaxActive, t.RepoRoot))
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s tree %s (max_depth=%d, max_active=%d, repo=%s)\n", verb, t.ID, t.MaxDepth, t.MaxActive, t.RepoRoot)
+	if !created && len(t.Nodes) > 1 {
+		if cwd, cerr := os.Getwd(); cerr == nil && cwd != "" && filepath.Clean(cwd) != filepath.Clean(t.RepoRoot) {
+			fmt.Fprintf(&b, "Note: active tree %s still has %d active child node(s) bound to repo=%s (current cwd=%s).\n",
+				t.ID, len(t.Nodes)-1, t.RepoRoot, cwd)
+		}
+	}
+	writeOut(b.String())
 	return nil
 }
 
@@ -549,7 +558,8 @@ func cmdWatch(args []string) error {
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	treeID := fs.String("tree", "", "tree id to watch")
 	poll := fs.Duration("poll", 3*time.Second, "poll interval")
-	stall := fs.Duration("stall", 10*time.Minute, "stall timeout")
+	stall := fs.Duration("stall", 0, "stall timeout (default 5m or BSWARM_STALL_TIMEOUT)")
+	nudge := fs.Duration("nudge", 0, "mid-stall worker nudge timeout (default stall/2; negative disables)")
 	idleExit := fs.Duration("idle-exit", 3*time.Minute, "auto-exit after idle duration")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -570,6 +580,7 @@ func cmdWatch(args []string) error {
 		TreeID:       *treeID,
 		PollInterval: *poll,
 		StallTimeout: *stall,
+		NudgeTimeout: *nudge,
 		IdleExit:     *idleExit,
 	})
 	wd.ProviderReloader = reloader

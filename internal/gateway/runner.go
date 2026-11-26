@@ -57,7 +57,18 @@ type TurnOpts struct {
 	OnConvID        func(string)
 }
 
-// ResolveAgyBinary finds the agy binary to run for headless gateway workers.
+// isLanguageServerBinary detects Desktop's bundled language_server binary, which supports
+// `agentapi` subcommands but lacks CLI print/stream-json flags required by external gateway turns.
+func isLanguageServerBinary(p string) bool {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(p)))
+	base = strings.TrimSuffix(base, ".exe")
+	return base == "language_server" || strings.HasPrefix(base, "language_server_") || strings.HasPrefix(base, "language_server-")
+}
+
+// ResolveAgyBinary finds the `agy` CLI binary to run headless external gateway workers.
+// Real `agy` installations are checked ahead of ANTIGRAVITY_AGENTAPI_EXE because Antigravity Desktop
+// injects ANTIGRAVITY_AGENTAPI_EXE pointing to `resources/bin/language_server`, which cannot run
+// `--output-format stream-json --print`.
 func ResolveAgyBinary(spec *provider.ProviderSpec) (string, error) {
 	if spec != nil && strings.TrimSpace(spec.AgyBin) != "" {
 		return strings.TrimSpace(spec.AgyBin), nil
@@ -65,19 +76,24 @@ func ResolveAgyBinary(spec *provider.ProviderSpec) (string, error) {
 	if v := strings.TrimSpace(os.Getenv("BSWARM_AGY_BIN")); v != "" {
 		return v, nil
 	}
-	if v := strings.TrimSpace(os.Getenv("ANTIGRAVITY_AGENTAPI_EXE")); v != "" {
-		return v, nil
-	}
 	if p, err := exec.LookPath("agy"); err == nil {
 		return p, nil
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		cand := filepath.Join(home, ".local", "bin", "agy")
-		if _, err := os.Stat(cand); err == nil {
-			return cand, nil
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		for _, name := range []string{"agy", "agy.exe"} {
+			cand := filepath.Join(home, ".local", "bin", name)
+			if fi, serr := os.Stat(cand); serr == nil && !fi.IsDir() {
+				return cand, nil
+			}
 		}
 	}
-	return "", errors.New("could not locate `agy` binary (set BSWARM_AGY_BIN or provider.agy_bin)")
+	if v := strings.TrimSpace(os.Getenv("ANTIGRAVITY_AGENTAPI_EXE")); v != "" {
+		if isLanguageServerBinary(v) {
+			return "", fmt.Errorf("external API gateway requires the `agy` CLI (ANTIGRAVITY_AGENTAPI_EXE=%q is Desktop's language_server and lacks --output-format stream-json); install `agy` CLI or set BSWARM_AGY_BIN / provider.agy_bin", v)
+		}
+		return v, nil
+	}
+	return "", errors.New("could not locate `agy` CLI binary required for external API gateway (install `agy` CLI or set BSWARM_AGY_BIN / provider.agy_bin)")
 }
 
 // ResolvePluginDir locates the bswarm plugin directory containing plugin.json + hooks.json

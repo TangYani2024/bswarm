@@ -62,6 +62,12 @@ func (c *CLITransport) run(ctx context.Context, subcmd string, args ...string) (
 	if c.ExePath != "" {
 		bin = c.ExePath
 		cmdArgs = append([]string{"agentapi", subcmd}, args...)
+	} else if p, err := exec.LookPath("agentapi"); err == nil {
+		bin = p
+		cmdArgs = append([]string{subcmd}, args...)
+	} else if p, err := exec.LookPath("agy"); err == nil {
+		bin = p
+		cmdArgs = append([]string{"agentapi", subcmd}, args...)
 	} else {
 		bin = "agentapi"
 		cmdArgs = append([]string{subcmd}, args...)

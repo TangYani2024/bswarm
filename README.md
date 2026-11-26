@@ -12,13 +12,15 @@ English | [简体中文](README.zh-CN.md)
 - **Write isolation**: Supports isolated git worktrees (`--worktree`) and hook-enforced shared-workspace path locks (`--owns`).
 - **Official + external model mixing**: Runs official Antigravity models with zero external configuration, or mixes in external OpenAI/Gemini-compatible endpoints in the same tree using isolated worker environments.
 - **Hot-reloaded providers & concurrency pools**: Dynamically reloads `providers.json` across CLI calls and the background watchdog without restarting, with optional per-provider/per-prefix concurrency limits, automatic queuing, stream idle timeout, and pool failover.
-- **Zero-token watchdog**: Monitors active nodes, relays sandboxed inbox notifications, promotes queued DAG/concurrency tasks, and alerts on stalls or quota errors.
+- **Zero-token watchdog**: Monitors active nodes, relays sandboxed inbox notifications, promotes queued DAG/concurrency tasks, nudges idle workers, early-detects hook/error loops, and terminates hung external gateway workers to release concurrency slots.
 
 ## Build and Install
 
-Requires Go >= 1.22 and Node.js.
+Requires Go >= 1.22 (and Node.js for CLI installations; Antigravity Desktop falls back to its bundled `agy-node` or `bswarm` on `PATH`).
 
 > Recommendation: Before enabling this plugin, disable any previously installed original swarm plugin (run `agy plugin list` and `agy plugin disable <plugin-name>`, and replace any old `bswarm` symlink on `PATH`) to prevent skill, hook, or command conflicts.
+
+### Antigravity CLI (`agy`)
 
 ```bash
 git clone https://github.com/TangYani2024/bswarm.git
@@ -33,6 +35,11 @@ agy plugin enable bswarm
 ln -sf ~/.gemini/config/plugins/bswarm/bin/bswarm ~/.local/bin/bswarm
 ```
 
+### Antigravity Desktop
+
+Official Antigravity Desktop loads plugins from `~/.gemini/config/plugins/` and supports official subagents, hooks, and the built-in Swarm UI board directly. If `agy` CLI is not installed, copy or symlink the built repository to `~/.gemini/config/plugins/bswarm` and ensure `"plugins": { "bswarm": { "enabled": true } }` is present in `~/.gemini/config/config.json`.
+
+> Note: Running external third-party API providers (`--provider` / `pool:`) from Antigravity Desktop requires `agy` CLI to be installed alongside Desktop, because Desktop's bundled `language_server` does not implement headless `--output-format stream-json --print`.
 > Note: Communication with the local Antigravity Language Server (`ANTIGRAVITY_LS_ADDRESS`) requires loopback network access when running inside a terminal sandbox (`sandboxAllowNetwork`).
 
 ## Usage

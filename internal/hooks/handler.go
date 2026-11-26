@@ -194,17 +194,17 @@ func (h *Handler) checkWriteBoundary(t *store.Tree, self *store.Node, targetPath
 		if !isUnderDir(absTarget, wsDir) {
 			return &PreToolOutput{
 				Decision: "deny",
-				Reason: fmt.Sprintf("[bswarm] node %q runs in isolated worktree %s; do not write outside it (%s).",
-					self.ID, wsDir, targetPath),
+				Reason: fmt.Sprintf("[bswarm] node %q runs in isolated worktree %s; do not write outside it (%s). Tip: writing inside your artifacts dir (%s) is always allowed.",
+					self.ID, wsDir, targetPath, artDir),
 			}
 		}
 		if len(self.Owns) > 0 {
 			relWT := store.NormalizeRelPath(wsDir, absTarget)
-			if relWT != "" && !strings.HasPrefix(relWT, "..") && !store.MatchesAnyOwn(self.Owns, relWT) {
+			if relWT != "" && !strings.HasPrefix(relWT, "..") && !store.MatchesAnyOwn(self.Owns, relWT) && !store.MatchesAnyOwn(self.Owns, filepath.ToSlash(absTarget)) {
 				return &PreToolOutput{
 					Decision: "deny",
-					Reason: fmt.Sprintf("[bswarm] file %q is outside node %q's owned scope (%s).",
-						relWT, self.ID, strings.Join(self.Owns, ", ")),
+					Reason: fmt.Sprintf("[bswarm] file %q is outside node %q's owned scope (%s). Tip: writing inside your artifacts dir (%s) is always allowed.",
+						relWT, self.ID, strings.Join(self.Owns, ", "), artDir),
 				}
 			}
 		}
@@ -212,6 +212,10 @@ func (h *Handler) checkWriteBoundary(t *store.Tree, self *store.Node, targetPath
 	}
 
 	// Shared workspace ownership lock.
+	// Allow explicit absolute --owns globs targeting paths outside repoDir.
+	if len(self.Owns) > 0 && store.MatchesAnyOwn(self.Owns, filepath.ToSlash(absTarget)) {
+		return nil
+	}
 	rel := store.NormalizeRelPath(repoDir, absTarget)
 	if rel == "" || strings.HasPrefix(rel, "..") {
 		return nil
@@ -229,8 +233,8 @@ func (h *Handler) checkWriteBoundary(t *store.Tree, self *store.Node, targetPath
 		if store.MatchesAnyOwn(other.Owns, rel) {
 			return &PreToolOutput{
 				Decision: "deny",
-				Reason: fmt.Sprintf("[bswarm] file %q is exclusively owned by active node %q (%s); coordinate via parent or use --worktree.",
-					rel, other.ID, strings.Join(other.Owns, ", ")),
+				Reason: fmt.Sprintf("[bswarm] file %q is exclusively owned by active node %q (%s); coordinate via parent or use --worktree. Tip: writing inside your artifacts dir (%s) is always allowed.",
+					rel, other.ID, strings.Join(other.Owns, ", "), artDir),
 			}
 		}
 	}
@@ -239,8 +243,8 @@ func (h *Handler) checkWriteBoundary(t *store.Tree, self *store.Node, targetPath
 	if len(self.Owns) > 0 && !store.MatchesAnyOwn(self.Owns, rel) {
 		return &PreToolOutput{
 			Decision: "deny",
-			Reason: fmt.Sprintf("[bswarm] file %q is outside node %q's owned scope (%s).",
-				rel, self.ID, strings.Join(self.Owns, ", ")),
+			Reason: fmt.Sprintf("[bswarm] file %q is outside node %q's owned scope (%s; repo=%s). Tip: writing inside your artifacts dir (%s) is always allowed.",
+				rel, self.ID, strings.Join(self.Owns, ", "), repoDir, artDir),
 		}
 	}
 	return nil

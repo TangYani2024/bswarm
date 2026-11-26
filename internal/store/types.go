@@ -69,8 +69,9 @@ type Node struct {
 	InboxTotalSeq     int           `json:"inbox_total_seq"`
 	InboxDeliveredSeq int           `json:"inbox_delivered_seq"`
 	TouchedFiles      []string      `json:"touched_files,omitempty"`
-	LastAlertKey   string        `json:"last_alert_key,omitempty"`
-	LastError      string        `json:"last_error,omitempty"`
+	LastAlertKey      string        `json:"last_alert_key,omitempty"`
+	LastNudgeKey      string        `json:"last_nudge_key,omitempty"`
+	LastError         string        `json:"last_error,omitempty"`
 	CreatedAt      time.Time     `json:"created_at"`
 	UpdatedAt      time.Time     `json:"updated_at"`
 }

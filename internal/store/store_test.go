@@ -2,6 +2,7 @@ package store
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -201,5 +202,37 @@ func TestDAGAndOwnsMatching(t *testing.T) {
 	}
 	if _, _, overlap := OwnsOverlap([]string{"src/ui/**"}, []string{"src/api/**"}); overlap {
 		t.Fatalf("did not expect overlap between src/ui/** and src/api/**")
+	}
+}
+
+func TestResolveDataDirProbesDesktopAppData(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BSWARM_DATA_DIR", "")
+	t.Setenv("PLUGIN_DATA", "")
+	t.Setenv("ANTIGRAVITY_APP_DATA_DIR", "")
+	t.Setenv("ANTIGRAVITY_CONVERSATION_ID", "")
+
+	// When Desktop has an existing bswarm index.json and CLI does not, pick Desktop automatically.
+	deskData := filepath.Join(home, ".gemini", "antigravity", "plugin_data", "bswarm")
+	if err := os.MkdirAll(deskData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deskData, "index.json"), []byte(`{"conversations":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveDataDir(); got != deskData {
+		t.Fatalf("expected Desktop data dir %q, got %q", deskData, got)
+	}
+
+	// When ANTIGRAVITY_CONVERSATION_ID matches a CLI brain directory, prefer CLI over Desktop.
+	t.Setenv("ANTIGRAVITY_CONVERSATION_ID", "conv-cli-99")
+	cliBrain := filepath.Join(home, ".gemini", "antigravity-cli", "brain", "conv-cli-99")
+	if err := os.MkdirAll(cliBrain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantCLI := filepath.Join(home, ".gemini", "antigravity-cli", "plugin_data", "bswarm")
+	if got := ResolveDataDir(); got != wantCLI {
+		t.Fatalf("expected CLI data dir %q via brain conv match, got %q", wantCLI, got)
 	}
 }

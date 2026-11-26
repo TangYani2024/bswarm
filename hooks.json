@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/hook.mjs pre-tool-use",
+            "command": "node scripts/hook.mjs pre-tool-use || agy-node scripts/hook.mjs pre-tool-use || bswarm hook pre-tool-use",
             "timeout": 4
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/hook.mjs post-tool-use",
+            "command": "node scripts/hook.mjs post-tool-use || agy-node scripts/hook.mjs post-tool-use || bswarm hook post-tool-use",
             "timeout": 4
           }
         ]
@@ -27,14 +27,14 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "node scripts/hook.mjs pre-invocation",
+        "command": "node scripts/hook.mjs pre-invocation || agy-node scripts/hook.mjs pre-invocation || bswarm hook pre-invocation",
         "timeout": 4
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "node scripts/hook.mjs stop",
+        "command": "node scripts/hook.mjs stop || agy-node scripts/hook.mjs stop || bswarm hook stop",
         "timeout": 4
       }
     ]

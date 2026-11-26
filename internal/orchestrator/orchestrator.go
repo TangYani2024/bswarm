@@ -85,17 +85,13 @@ type InitOpts struct {
 	AppDataDir     string
 	MaxDepth       int
 	MaxActive      int
+	UpdateIfIdle   bool
 }
 
 func (o *Orchestrator) Init(opts InitOpts) (*store.Tree, bool, error) {
 	convID := strings.TrimSpace(opts.ConversationID)
 	if convID == "" {
 		return nil, false, errors.New("ANTIGRAVITY_CONVERSATION_ID is required (or pass --conv)")
-	}
-	if ref, err := o.Store.ResolveConversation(convID); err == nil && ref != nil {
-		if existing, err := o.Store.LoadTree(ref.TreeID); err == nil {
-			return existing, false, nil
-		}
 	}
 	repoRoot := strings.TrimSpace(opts.RepoRoot)
 	if repoRoot == "" {
@@ -104,6 +100,45 @@ func (o *Orchestrator) Init(opts InitOpts) (*store.Tree, bool, error) {
 	if gr := worktree.GitRoot(repoRoot); gr != "" {
 		repoRoot = gr
 	}
+	appData := strings.TrimSpace(opts.AppDataDir)
+	if appData == "" {
+		appData = strings.TrimSpace(os.Getenv("ANTIGRAVITY_APP_DATA_DIR"))
+	}
+	if ref, err := o.Store.ResolveConversation(convID); err == nil && ref != nil {
+		if existing, err := o.Store.LoadTree(ref.TreeID); err == nil {
+			if opts.UpdateIfIdle && len(existing.Nodes) <= 1 {
+				updated, uerr := o.Store.UpdateTree(ref.TreeID, func(tr *store.Tree) error {
+					if len(tr.Nodes) > 1 {
+						return nil
+					}
+					if g := strings.TrimSpace(opts.Goal); g != "" {
+						tr.Goal, _ = store.TruncateRunes(g, store.MaxSummaryRunes)
+					}
+					if repoRoot != "" {
+						tr.RepoRoot = repoRoot
+						if rootNode := tr.Nodes["root"]; rootNode != nil {
+							rootNode.WorkspacePath = repoRoot
+						}
+					}
+					if appData != "" {
+						tr.AppDataDir = appData
+					}
+					if opts.MaxDepth > 0 {
+						tr.MaxDepth = opts.MaxDepth
+					}
+					if opts.MaxActive > 0 {
+						tr.MaxActive = opts.MaxActive
+					}
+					return nil
+				})
+				if uerr == nil {
+					_ = uimirror.SyncRosterAndPlan(o.Store, updated)
+					return updated, false, nil
+				}
+			}
+			return existing, false, nil
+		}
+	}
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
 		maxDepth = store.DefaultMaxDepth
@@ -111,10 +146,6 @@ func (o *Orchestrator) Init(opts InitOpts) (*store.Tree, bool, error) {
 	maxActive := opts.MaxActive
 	if maxActive <= 0 {
 		maxActive = store.DefaultMaxActive
-	}
-	appData := strings.TrimSpace(opts.AppDataDir)
-	if appData == "" {
-		appData = strings.TrimSpace(os.Getenv("ANTIGRAVITY_APP_DATA_DIR"))
 	}
 	prefix := store.SafeFileKey(convID)
 	if len(prefix) > 8 {

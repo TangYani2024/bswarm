@@ -23,6 +23,39 @@ type Store struct {
 	RootDir string
 }
 
+var knownProductDirs = []string{"antigravity-cli", "antigravity", "antigravity-ide"}
+
+// ProbeAppDataDir locates the Antigravity product data directory under ~/.gemini.
+// When convID is non-empty, it prefers the product directory owning brain/<convID>.
+// Otherwise it prefers the product directory with the most recently updated bswarm index.json.
+func ProbeAppDataDir(convID string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+	cid := strings.TrimSpace(convID)
+	if cid != "" {
+		for _, prod := range knownProductDirs {
+			cand := filepath.Join(home, ".gemini", prod)
+			if fi, serr := os.Stat(filepath.Join(cand, "brain", cid)); serr == nil && fi.IsDir() {
+				return cand
+			}
+		}
+	}
+	var newestDir string
+	var newestMod time.Time
+	for _, prod := range knownProductDirs {
+		cand := filepath.Join(home, ".gemini", prod)
+		if fi, serr := os.Stat(filepath.Join(cand, "plugin_data", "bswarm", "index.json")); serr == nil && !fi.IsDir() {
+			if newestDir == "" || fi.ModTime().After(newestMod) {
+				newestDir = cand
+				newestMod = fi.ModTime()
+			}
+		}
+	}
+	return newestDir
+}
+
 // ResolveDataDir determines the persistent data directory using official Antigravity conventions.
 func ResolveDataDir() string {
 	if v := strings.TrimSpace(os.Getenv("BSWARM_DATA_DIR")); v != "" {
@@ -33,6 +66,9 @@ func ResolveDataDir() string {
 	}
 	if v := strings.TrimSpace(os.Getenv("ANTIGRAVITY_APP_DATA_DIR")); v != "" {
 		return filepath.Join(v, "plugin_data", "bswarm")
+	}
+	if appDir := ProbeAppDataDir(os.Getenv("ANTIGRAVITY_CONVERSATION_ID")); appDir != "" {
+		return filepath.Join(appDir, "plugin_data", "bswarm")
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".gemini", "antigravity-cli", "plugin_data", "bswarm")
