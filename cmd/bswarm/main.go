@@ -20,12 +20,13 @@ import (
 	"github.com/TangYani2024/bswarm/internal/hooks"
 	"github.com/TangYani2024/bswarm/internal/orchestrator"
 	"github.com/TangYani2024/bswarm/internal/provider"
+	"github.com/TangYani2024/bswarm/internal/sidecarui"
 	"github.com/TangYani2024/bswarm/internal/store"
 	"github.com/TangYani2024/bswarm/internal/uimirror"
 	"github.com/TangYani2024/bswarm/internal/watchdog"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -65,6 +66,8 @@ func main() {
 		err = cmdGC(args)
 	case "sync-ui":
 		err = cmdSyncUI(args)
+	case "ui-sidecar":
+		err = cmdUISidecar(args)
 	case "providers":
 		err = cmdProviders(args)
 	case "_gw-run":
@@ -108,6 +111,7 @@ Commands:
   providers  [--tree id] [--json]
   gc         [--tree id] [--native-audit] [--apply] [--older-than 7d] [--json]
   sync-ui    [--tree id]
+  ui-sidecar [--port 0] [--host 127.0.0.1]
   watch      --tree <tree_id> [--poll 3s] [--stall 5m] [--nudge 2m30s] [--idle-exit 3m]
   hook       <pre-tool-use|post-tool-use|pre-invocation|stop>
 `)
@@ -1091,6 +1095,26 @@ func cmdSyncUI(args []string) error {
 	writeOut(fmt.Sprintf("Synced tree %s to official Swarm UI dir: %s (seq=%d, members=%d)\n",
 		t.ID, uimirror.SwarmDir(t), t.MirrorSeq, len(t.Nodes)))
 	return nil
+}
+
+func cmdUISidecar(args []string) error {
+	fs := flag.NewFlagSet("ui-sidecar", flag.ContinueOnError)
+	host := fs.String("host", "127.0.0.1", "loopback bind host")
+	port := fs.Int("port", 0, "HTTP port (defaults to ANTIGRAVITY_SIDECAR_WEB_PORT or random)")
+	storeDir := fs.String("store", "", "override bswarm data dir")
+	appData := fs.String("app-data", "", "override Antigravity app data dir")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	srv := sidecarui.New(sidecarui.Config{
+		Host:       *host,
+		Port:       *port,
+		StoreDir:   *storeDir,
+		AppDataDir: *appData,
+	})
+	return srv.Start(ctx)
 }
 
 func hookFallback(event string) string {

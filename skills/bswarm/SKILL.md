@@ -42,5 +42,5 @@ bswarm gc [--native-audit] [--apply --older-than 7d]                      # clea
 ```
 
 ## Workflow
-1. Split tasks with disjoint `--worktree` or `--owns`, run `spawn`, then end turn until woken. On Antigravity Desktop, include `[Swarm](sidecar://swarm/swarm_board/)` in your reply after spawning so the user can open the live Swarm UI pane in one click.
+1. Split tasks with disjoint `--worktree` or `--owns`, run `spawn`, then end turn until woken. On Antigravity Desktop, include `[bswarm](sidecar://bswarm/bswarm_board/)` in your reply after spawning so the user can open the hierarchical tree board in one click.
 2. On wake, run `bswarm inbox`, inspect artifacts as needed, then reuse idle nodes or run `merge` and `retire --cascade`.

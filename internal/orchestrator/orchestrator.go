@@ -587,11 +587,17 @@ func (o *Orchestrator) Spawn(ctx context.Context, opts SpawnOpts) (*SpawnResult,
 			}
 		} else {
 			title := fmt.Sprintf("[bswarm] %s (%s)", nodeCopy.ID, nodeCopy.Role)
+			parentConv := ""
+			if pNode := treeCopy.Nodes[nodeCopy.ParentID]; pNode != nil {
+				parentConv = pNode.ConversationID
+			}
 			convID, err = o.API.NewConversation(ctx, agentapi.NewConversationOpts{
-				Model:   opts.Model,
-				Title:   title,
-				Profile: opts.Profile,
-				Prompt:  prompt,
+				Model:                opts.Model,
+				Title:                title,
+				Profile:              opts.Profile,
+				Prompt:               prompt,
+				ParentConversationID: parentConv,
+				WorkspacePath:        nodeCopy.WorkspacePath,
 			})
 			if err != nil {
 				rollbackSpawn()
@@ -1052,6 +1058,7 @@ func (o *Orchestrator) PromoteReadyTasks(ctx context.Context, treeID string) ([]
 		task         store.Task
 		treeSnap     store.Tree
 		artifactsDir string
+		parentConv   string
 		isExternal   bool
 		prevProvider string
 		prevModel    string
@@ -1096,11 +1103,16 @@ func (o *Orchestrator) PromoteReadyTasks(ctx context.Context, treeID string) ([]
 			n.UpdatedAt = now
 			tk.State = store.TaskRunning
 			tk.UpdatedAt = now
+			parentConv := ""
+			if pNode := t.Nodes[n.ParentID]; pNode != nil {
+				parentConv = pNode.ConversationID
+			}
 			claims = append(claims, claimed{
 				node:         *n,
 				task:         *tk,
 				treeSnap:     *t,
 				artifactsDir: o.Store.ArtifactsDir(t.ID, n.ID),
+				parentConv:   parentConv,
 				isExternal:   isExt,
 				prevProvider: prevProv,
 				prevModel:    prevMod,
@@ -1150,9 +1162,11 @@ func (o *Orchestrator) PromoteReadyTasks(ctx context.Context, treeID string) ([]
 
 		title := fmt.Sprintf("[bswarm] %s (%s)", c.node.ID, c.node.Role)
 		convID, err := o.API.NewConversation(ctx, agentapi.NewConversationOpts{
-			Model:  c.node.Model,
-			Title:  title,
-			Prompt: prompt,
+			Model:                c.node.Model,
+			Title:                title,
+			Prompt:               prompt,
+			ParentConversationID: c.parentConv,
+			WorkspacePath:        c.node.WorkspacePath,
 		})
 		if err != nil {
 			// Roll back claim to queued so next pass can retry cleanly.

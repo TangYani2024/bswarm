@@ -3,20 +3,27 @@ package agentapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 type NewConversationOpts struct {
-	Model   string
-	Title   string
-	Profile string
-	Prompt  string
+	Model                string
+	Title                string
+	Profile              string
+	Prompt               string
+	ParentConversationID string
+	WorkspacePath        string
 }
 
 type Metadata struct {
@@ -102,10 +109,76 @@ func (c *CLITransport) run(ctx context.Context, subcmd string, args ...string) (
 	return out, nil
 }
 
+func isModelTierAlias(m string) bool {
+	switch strings.ToLower(strings.TrimSpace(m)) {
+	case "flash", "flash_lite", "pro", "high", "low":
+		return true
+	default:
+		return false
+	}
+}
+
+// PathToFileURI converts a local filesystem path (Unix, Windows drive, or UNC) into a file:// URI.
+func PathToFileURI(p string) string {
+	s := strings.TrimSpace(p)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(s), "file://") {
+		return s
+	}
+	// Windows UNC path: \\host\share\dir -> file://host/share/dir
+	if strings.HasPrefix(s, `\\`) {
+		rest := strings.TrimPrefix(strings.ReplaceAll(s, `\`, "/"), "//")
+		parts := strings.Split(rest, "/")
+		for i := 1; i < len(parts); i++ {
+			parts[i] = url.PathEscape(parts[i])
+		}
+		return "file://" + strings.Join(parts, "/")
+	}
+	// Windows drive path: C:\foo\bar or C:/foo/bar -> file:///C:/foo/bar
+	if len(s) >= 2 && s[1] == ':' {
+		slash := strings.ReplaceAll(s, `\`, "/")
+		parts := strings.Split(slash, "/")
+		for i := 1; i < len(parts); i++ {
+			parts[i] = url.PathEscape(parts[i])
+		}
+		return "file:///" + strings.Join(parts, "/")
+	}
+	slash := filepath.ToSlash(s)
+	if !strings.HasPrefix(slash, "/") {
+		if abs, err := filepath.Abs(s); err == nil {
+			slash = filepath.ToSlash(abs)
+		}
+	}
+	parts := strings.Split(slash, "/")
+	for i := range parts {
+		if parts[i] != "" {
+			parts[i] = url.PathEscape(parts[i])
+		}
+	}
+	return "file://" + strings.Join(parts, "/")
+}
+
 func (c *CLITransport) NewConversation(ctx context.Context, opts NewConversationOpts) (string, error) {
 	if strings.TrimSpace(opts.Prompt) == "" {
 		return "", errors.New("prompt is required for new-conversation")
 	}
+
+	// Prefer native ConnectRPC StartCascade(source=SUBAGENT, parentConversationId=...) +
+	// SendUserCascadeMessage so child conversations are attached under their parent tree
+	// instead of cluttering the Antigravity Desktop top-level sidebar list.
+	// Falls back transparently to `agentapi new-conversation` for tier aliases or older LS builds.
+	parentConv := strings.TrimSpace(opts.ParentConversationID)
+	if parentConv == "" {
+		parentConv = strings.TrimSpace(os.Getenv("ANTIGRAVITY_CONVERSATION_ID"))
+	}
+	if parentConv != "" && c.Available() && strings.TrimSpace(os.Getenv("BSWARM_USE_AGENTAPI_NEW_CONV")) != "1" && !isModelTierAlias(opts.Model) {
+		if id, err := c.startSubagentCascade(ctx, parentConv, opts); err == nil && id != "" {
+			return id, nil
+		}
+	}
+
 	var args []string
 	if opts.Model != "" {
 		args = append(args, "--model="+opts.Model)
@@ -126,6 +199,116 @@ func (c *CLITransport) NewConversation(ctx context.Context, opts NewConversation
 		return "", fmt.Errorf("agentapi new-conversation returned no conversation_id: %s", string(out))
 	}
 	return id, nil
+}
+
+func (c *CLITransport) startSubagentCascade(ctx context.Context, parentConv string, opts NewConversationOpts) (string, error) {
+	lsAddr := strings.TrimSpace(os.Getenv("ANTIGRAVITY_LS_ADDRESS"))
+	csrf := strings.TrimSpace(os.Getenv("ANTIGRAVITY_CSRF_TOKEN"))
+	if lsAddr == "" || csrf == "" {
+		return "", errors.New("ANTIGRAVITY_LS_ADDRESS or ANTIGRAVITY_CSRF_TOKEN unset")
+	}
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	startReq := map[string]any{
+		"source":               "CORTEX_TRAJECTORY_SOURCE_SUBAGENT",
+		"parentConversationId": parentConv,
+	}
+	if uri := PathToFileURI(opts.WorkspacePath); uri != "" {
+		startReq["workspaceUris"] = []string{uri}
+	}
+	if strings.TrimSpace(opts.Title) != "" {
+		startReq["title"] = strings.TrimSpace(opts.Title)
+	}
+	if strings.TrimSpace(opts.Profile) != "" {
+		startReq["activeProfile"] = strings.TrimSpace(opts.Profile)
+	}
+
+	rawStart, scheme, err := callLocalLSConnectRPC(callCtx, lsAddr, csrf, "StartCascade", startReq)
+	if err != nil {
+		return "", err
+	}
+	childID := ParseConversationID(rawStart)
+	if childID == "" {
+		return "", fmt.Errorf("StartCascade returned no cascadeId: %s", string(rawStart))
+	}
+
+	msgReq := map[string]any{
+		"cascadeId": childID,
+		"items":     []map[string]any{{"text": opts.Prompt}},
+	}
+	if strings.TrimSpace(opts.Model) != "" {
+		msgReq["cascadeConfig"] = map[string]any{
+			"plannerConfig": map[string]any{
+				"modelName": strings.TrimSpace(opts.Model),
+			},
+		}
+	}
+	if strings.TrimSpace(opts.Profile) != "" {
+		msgReq["activeProfile"] = strings.TrimSpace(opts.Profile)
+	}
+	if _, _, err := callLocalLSConnectRPCWithScheme(callCtx, scheme, lsAddr, csrf, "SendUserCascadeMessage", msgReq); err != nil {
+		return "", err
+	}
+	return childID, nil
+}
+
+func callLocalLSConnectRPC(ctx context.Context, lsAddr, csrf, method string, payload any) ([]byte, string, error) {
+	if strings.HasPrefix(lsAddr, "http://") {
+		b, _, err := callLocalLSConnectRPCWithScheme(ctx, "http", strings.TrimPrefix(lsAddr, "http://"), csrf, method, payload)
+		return b, "http", err
+	}
+	if strings.HasPrefix(lsAddr, "https://") {
+		b, _, err := callLocalLSConnectRPCWithScheme(ctx, "https", strings.TrimPrefix(lsAddr, "https://"), csrf, method, payload)
+		return b, "https", err
+	}
+	b, status, err := callLocalLSConnectRPCWithScheme(ctx, "http", lsAddr, csrf, method, payload)
+	if err == nil {
+		return b, "http", nil
+	}
+	// Retry over loopback HTTPS when ANTIGRAVITY_LS_ADDRESS points to an HTTPS port.
+	if status == 400 || strings.Contains(strings.ToLower(err.Error()), "https") || strings.Contains(strings.ToLower(err.Error()), "eof") {
+		if b2, _, err2 := callLocalLSConnectRPCWithScheme(ctx, "https", lsAddr, csrf, method, payload); err2 == nil {
+			return b2, "https", nil
+		}
+	}
+	return b, "http", err
+}
+
+func callLocalLSConnectRPCWithScheme(ctx context.Context, scheme, hostPort, csrf, method string, payload any) ([]byte, int, error) {
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, err
+	}
+	endpoint := fmt.Sprintf("%s://%s/exa.language_server_pb.LanguageServerService/%s", scheme, hostPort, method)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-codeium-csrf-token", csrf)
+	req.Header.Set("Connect-Protocol-Version", "1")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	if scheme == "https" {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if resp.StatusCode != http.StatusOK {
+		return raw, resp.StatusCode, fmt.Errorf("LS %s HTTP %d: %s", method, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return raw, resp.StatusCode, nil
 }
 
 func (c *CLITransport) SendMessage(ctx context.Context, recipientID, title, content string) error {

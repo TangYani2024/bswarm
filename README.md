@@ -6,7 +6,8 @@ English | [简体中文](README.zh-CN.md)
 
 ## Features
 
-- **Hierarchical tree orchestration**: Supports multi-level `Root -> Lead -> Worker` delegation with strict parent-child encapsulation and cascade retirement.
+- **Hierarchical tree orchestration**: Supports multi-level `Root -> Lead -> Worker` delegation with strict parent-child encapsulation, native parent-attached subagent conversations (avoiding top-level sidebar clutter), and cascade retirement.
+- **Native Desktop Tree UI sidecar**: Includes a built-in `sidecars/bswarm_board` panel (`[bswarm](sidecar://bswarm/bswarm_board/)`) rendering the multi-level tree, DAG dependencies, official and external API concurrency slots, isolated gateway logs, artifact previews, and node actions.
 - **Private inbox with pass-by-reference**: Bounds message summaries to 400 characters and spills long outputs to per-node artifact files.
 - **Warm node reuse**: Finished nodes transition to `idle` and can be resumed via `--reuse` or `assign` without cold-starting.
 - **Write isolation**: Supports isolated git worktrees (`--worktree`) and hook-enforced shared-workspace path locks (`--owns`).

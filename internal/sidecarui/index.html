@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>bswarm — Hierarchical Tree Board</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #171a23;
+    --surface-2: #1e2230;
+    --border: #2a2f42;
+    --text: #e6e9f2;
+    --muted: #8e96b0;
+    --accent: #6aa9ff;
+    --accent-soft: rgba(106, 169, 255, 0.14);
+    --green: #3dd68c;
+    --green-soft: rgba(61, 214, 140, 0.14);
+    --amber: #f5b942;
+    --amber-soft: rgba(245, 185, 66, 0.14);
+    --red: #f76c7c;
+    --red-soft: rgba(247, 108, 124, 0.14);
+    --purple: #b58cff;
+    --purple-soft: rgba(181, 140, 255, 0.15);
+    --tree-line: #323952;
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7fb;
+      --surface: #ffffff;
+      --surface-2: #f0f2f8;
+      --border: #dde2ef;
+      --text: #1b2030;
+      --muted: #646e8a;
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.1);
+      --green: #16a34a;
+      --green-soft: rgba(22, 163, 74, 0.1);
+      --amber: #d97706;
+      --amber-soft: rgba(217, 119, 6, 0.12);
+      --red: #dc2626;
+      --red-soft: rgba(220, 38, 38, 0.1);
+      --purple: #7c3aed;
+      --purple-soft: rgba(124, 58, 237, 0.1);
+      --tree-line: #cbd3e6;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 12px 0;
+  }
+  .header-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: space-between;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+  .pulse {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px var(--green-soft);
+  }
+  .title {
+    font-weight: 650;
+    font-size: 13.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tree-select {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 6px;
+    font-size: 12px;
+    max-width: 170px;
+  }
+  .meta-line {
+    margin: 5px 0 8px;
+    color: var(--muted);
+    font-size: 11.5px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .tabs {
+    display: flex;
+    gap: 4px;
+  }
+  .tab {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    padding: 6px 10px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .tab .cnt {
+    margin-left: 4px;
+    padding: 0 5px;
+    border-radius: 99px;
+    background: var(--surface-2);
+    font-size: 10.5px;
+  }
+  main {
+    padding: 12px;
+    max-width: 980px;
+    margin: 0 auto;
+  }
+  .empty {
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .tree-children {
+    margin-left: 16px;
+    padding-left: 12px;
+    border-left: 1.5px solid var(--tree-line);
+  }
+  .node-wrap {
+    margin-bottom: 8px;
+    position: relative;
+  }
+  .tree-children > .node-wrap::before {
+    content: "";
+    position: absolute;
+    left: -12px;
+    top: 16px;
+    width: 12px;
+    height: 1.5px;
+    background: var(--tree-line);
+  }
+  .node-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 9px 11px;
+  }
+  .node-card.state-working { border-left: 3px solid var(--accent); }
+  .node-card.state-idle { border-left: 3px solid var(--green); }
+  .node-card.state-queued { border-left: 3px solid var(--amber); }
+  .node-card.state-blocked, .node-card.state-error { border-left: 3px solid var(--red); }
+  .node-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .fold-btn {
+    width: 18px; height: 18px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 14px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .node-id {
+    font-weight: 650;
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 99px;
+    font-size: 10.5px;
+    font-weight: 600;
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .badge.working { background: var(--accent-soft); color: var(--accent); }
+  .badge.idle { background: var(--green-soft); color: var(--green); }
+  .badge.queued { background: var(--amber-soft); color: var(--amber); }
+  .badge.blocked, .badge.error { background: var(--red-soft); color: var(--red); }
+  .badge.ext { background: var(--purple-soft); color: var(--purple); }
+  .badge.official { background: var(--accent-soft); color: var(--accent); }
+  .node-goal {
+    margin-top: 5px;
+    color: var(--text);
+    font-size: 12px;
+    word-break: break-word;
+  }
+  .node-err {
+    margin-top: 5px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    background: var(--red-soft);
+    color: var(--red);
+    font-size: 11.5px;
+    word-break: break-word;
+  }
+  .chips {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .chip {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+  }
+  .actions {
+    margin-top: 7px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .btn {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.danger:hover { border-color: var(--red); color: var(--red); }
+  .feed-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 7px;
+  }
+  .feed-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  .feed-route { font-family: var(--mono); color: var(--text); font-weight: 600; }
+  .prov-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .bar-bg {
+    height: 6px;
+    background: var(--surface-2);
+    border-radius: 99px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .bar-fill {
+    height: 100%;
+    background: var(--purple);
+    border-radius: 99px;
+  }
+  .section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 14px 0 7px;
+    font-weight: 650;
+  }
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: none;
+    z-index: 30;
+  }
+  .drawer-backdrop.open { display: flex; justify-content: flex-end; }
+  .drawer {
+    width: min(560px, 95vw);
+    height: 100%;
+    background: var(--bg);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer-head {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .drawer-body {
+    flex: 1;
+    overflow: auto;
+    padding: 12px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .toast {
+    position: fixed;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    display: none;
+    z-index: 40;
+  }
+  .toast.show { display: block; }
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="header-row">
+      <div class="brand">
+        <span class="pulse" id="live-dot"></span>
+        <span class="title" id="tree-title">bswarm</span>
+      </div>
+      <select class="tree-select" id="tree-select" title="Select bswarm tree"></select>
+    </div>
+    <div class="meta-line" id="meta-line">Loading tree state...</div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="tree">Tree <span class="cnt" id="cnt-tree">0</span></button>
+      <button class="tab" data-tab="feed">Feed <span class="cnt" id="cnt-feed">0</span></button>
+      <button class="tab" data-tab="providers">Providers <span class="cnt" id="cnt-prov">0</span></button>
+    </nav>
+  </header>
+
+  <main id="app"></main>
+
+  <div class="drawer-backdrop" id="drawer-bg">
+    <div class="drawer">
+      <div class="drawer-head">
+        <strong id="drawer-title">Details</strong>
+        <button class="btn" id="drawer-close">Close</button>
+      </div>
+      <div class="drawer-body" id="drawer-body"></div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const uiToken = params.get('token') || '';
+  const state = {
+    tab: 'tree',
+    selectedTreeId: params.get('treeId') || '',
+    collapsed: new Set(),
+    snap: null,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const shortTime = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return isNaN(d) ? '' : d.toTimeString().slice(0, 8);
+  };
+
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => el.classList.remove('show'), 2600);
+  }
+
+  function currentConvId() {
+    return (window.sidecar && window.sidecar.conversationId) || params.get('conversationId') || '';
+  }
+
+  async function apiGet(path) {
+    const fn = (window.sidecar && window.sidecar.fetch) ? window.sidecar.fetch.bind(window.sidecar) : fetch;
+    const res = await fn(path, { method: 'GET' });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return res.json();
+  }
+
+  async function apiPost(path, body) {
+    const fn = (window.sidecar && window.sidecar.fetch) ? window.sidecar.fetch.bind(window.sidecar) : fetch;
+    const headers = { 'Content-Type': 'application/json' };
+    if (uiToken) headers['X-Sidecar-Token'] = uiToken;
+    const res = await fn(path, { method: 'POST', headers, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  function openConv(convId) {
+    if (!convId) return;
+    if (window.sidecar && window.sidecar.ui && window.sidecar.ui.toggleConversation) {
+      window.sidecar.ui.toggleConversation(convId);
+      return;
+    }
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'toggle-conversation', payload: { conversationId: convId } }, '*');
+      return;
+    }
+    toast('Conversation ID: ' + convId);
+  }
+
+  function openDrawer(title, text) {
+    $('drawer-title').textContent = title;
+    $('drawer-body').textContent = text;
+    $('drawer-bg').classList.add('open');
+  }
+  $('drawer-close').onclick = () => $('drawer-bg').classList.remove('open');
+  $('drawer-bg').onclick = (e) => { if (e.target === $('drawer-bg')) $('drawer-bg').classList.remove('open'); };
+
+  document.querySelectorAll('.tab').forEach((btn) => {
+    btn.onclick = () => {
+      state.tab = btn.dataset.tab;
+      document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
+      render();
+    };
+  });
+
+  $('tree-select').onchange = (e) => {
+    state.selectedTreeId = e.target.value;
+    refresh();
+  };
+
+  function renderNode(n) {
+    const hasKids = Array.isArray(n.children) && n.children.length > 0;
+    const isCollapsed = state.collapsed.has(n.id);
+    const modelBadge = n.provider
+      ? `<span class="badge ext">${esc(n.provider)}:${esc(n.provider_model || n.model || '')}</span>`
+      : `<span class="badge official">${esc(n.model || 'official')}</span>`;
+    const poolBadge = n.pool ? `<span class="badge ext">pool:${esc(n.pool)}</span>` : '';
+    const unreadBadge = n.inbox_unread > 0 ? `<span class="badge queued">${n.inbox_unread} unread</span>` : '';
+
+    const chips = [];
+    if (n.current_task_id) chips.push(`task:${n.current_task_id}`);
+    if (n.workspace_mode === 'worktree' && n.branch) chips.push(`wt:${n.branch}`);
+    if (n.owns && n.owns.length) chips.push(`owns:${n.owns.join(',')}`);
+    if (n.depends_on && n.depends_on.length) chips.push(`deps:${n.depends_on.join(',')}`);
+    if (n.touched_files && n.touched_files.length) chips.push(`edited:${n.touched_files.length} file(s)`);
+    if (n.worker_pid) chips.push(`pid:${n.worker_pid}`);
+
+    const actions = [];
+    if (n.conversation_id && !n.provider) {
+      actions.push(`<button class="btn" data-open-conv="${esc(n.conversation_id)}">Open Chat</button>`);
+    }
+    if (n.has_log) {
+      actions.push(`<button class="btn" data-log="${esc(n.id)}">Logs</button>`);
+    }
+    if (n.artifacts && n.artifacts.length) {
+      for (const af of n.artifacts.slice(0, 3)) {
+        actions.push(`<button class="btn" data-art-node="${esc(n.id)}" data-art-file="${esc(af)}">${esc(af)}</button>`);
+      }
+    }
+    if (n.id !== 'root') {
+      if (n.state === 'working' || n.state === 'queued' || n.state === 'blocked') {
+        actions.push(`<button class="btn danger" data-act="cancel" data-node="${esc(n.id)}">Cancel</button>`);
+      } else {
+        actions.push(`<button class="btn danger" data-act="retire" data-node="${esc(n.id)}">Retire</button>`);
+      }
+    }
+
+    const childrenHTML = (hasKids && !isCollapsed)
+      ? `<div class="tree-children">${n.children.map(renderNode).join('')}</div>`
+      : '';
+
+    return `
+      <div class="node-wrap">
+        <div class="node-card state-${esc(n.state)}">
+          <div class="node-head">
+            ${hasKids ? `<button class="fold-btn" data-fold="${esc(n.id)}">${isCollapsed ? '+' : '-'}</button>` : ''}
+            <span class="badge">L${n.depth}</span>
+            <span class="node-id">${esc(n.id)}</span>
+            <span class="badge">${esc(n.role)}</span>
+            <span class="badge ${esc(n.state)}">${esc(n.state)}</span>
+            ${modelBadge}
+            ${poolBadge}
+            ${unreadBadge}
+          </div>
+          ${n.current_goal ? `<div class="node-goal">${esc(n.current_goal)}</div>` : ''}
+          ${n.last_summary ? `<div class="node-goal" style="color:var(--muted)">Result: ${esc(n.last_summary)}</div>` : ''}
+          ${n.last_error ? `<div class="node-err">${esc(n.last_error)}</div>` : ''}
+          ${chips.length ? `<div class="chips">${chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('')}</div>` : ''}
+          ${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}
+        </div>
+        ${childrenHTML}
+      </div>`;
+  }
+
+  function render() {
+    const snap = state.snap;
+    const app = $('app');
+    if (!snap) return;
+
+    const sel = $('tree-select');
+    const curVal = (snap.active_tree && snap.active_tree.id) || state.selectedTreeId;
+    sel.innerHTML = (snap.trees || []).map((t) =>
+      `<option value="${esc(t.id)}" ${t.id === curVal ? 'selected' : ''}>${esc(t.id)} (${t.active_nodes})</option>`
+    ).join('') || '<option value="">No trees</option>';
+
+    const tr = snap.active_tree;
+    $('tree-title').textContent = tr ? (tr.goal || `bswarm ${tr.id}`) : 'bswarm — Tree Board';
+    $('cnt-tree').textContent = tr ? tr.active_count : 0;
+    $('cnt-feed').textContent = tr && tr.feed ? tr.feed.length : 0;
+    $('cnt-prov').textContent = (snap.providers || []).length;
+
+    if (tr) {
+      $('meta-line').innerHTML = `
+        <span>tree: <code>${esc(tr.id)}</code></span>
+        <span>active: ${tr.active_count}/${tr.max_active}</span>
+        <span>archived: ${tr.archived_count}</span>
+        <span>depth <= ${tr.max_depth}</span>
+        ${tr.repo_root ? `<span>repo: ${esc(tr.repo_root)}</span>` : ''}`;
+    } else {
+      $('meta-line').textContent = `No active bswarm tree found in ${snap.store_dir}`;
+    }
+
+    if (state.tab === 'tree') {
+      if (!tr || !tr.roots || !tr.roots.length) {
+        app.innerHTML = `<div class="empty">No active bswarm tree in this conversation yet.<br/>Run <code>/bswarm</code> to orchestrate a multi-level agent tree.</div>`;
+        return;
+      }
+      let html = tr.roots.map(renderNode).join('');
+      if (tr.archived_nodes && tr.archived_nodes.length) {
+        html += `<div class="section-label">Recently Archived (${tr.archived_nodes.length})</div>`;
+        html += tr.archived_nodes.slice(0, 8).map((an) => `
+          <div class="feed-item" style="opacity:0.75">
+            <div class="feed-head">
+              <span class="badge">L${an.depth}</span>
+              <span class="feed-route">${esc(an.id)}</span>
+              <span class="badge">${esc(an.role)}</span>
+              <span class="badge">${esc(an.state)}</span>
+              ${an.provider ? `<span class="badge ext">${esc(an.provider)}:${esc(an.provider_model || '')}</span>` : ''}
+            </div>
+          </div>`).join('');
+      }
+      app.innerHTML = html;
+      bindTreeEvents(tr.id);
+    } else if (state.tab === 'feed') {
+      if (!tr || !tr.feed || !tr.feed.length) {
+        app.innerHTML = `<div class="empty">No private inbox messages yet.</div>`;
+        return;
+      }
+      app.innerHTML = tr.feed.map((m) => `
+        <div class="feed-item">
+          <div class="feed-head">
+            <span class="badge">${esc(m.kind)}</span>
+            <span class="feed-route">${esc(m.from)} -> ${esc(m.to)}</span>
+            ${m.task_id ? `<span class="chip">${esc(m.task_id)}</span>` : ''}
+            <span style="margin-left:auto">${esc(shortTime(m.at))}</span>
+          </div>
+          <div class="node-goal">${esc(m.summary)}</div>
+          ${m.artifact ? `<div class="chips"><span class="chip">artifact: ${esc(m.artifact)}</span></div>` : ''}
+        </div>`).join('');
+    } else {
+      const provs = snap.providers || [];
+      const pools = snap.pools || [];
+      if (!provs.length && !pools.length) {
+        app.innerHTML = `<div class="empty">Using official Antigravity models only.<br/>Add external OpenAI/Gemini endpoints anytime via <code>bswarm providers add</code> (hot-reloaded).</div>`;
+        return;
+      }
+      let html = snap.providers_file ? `<div class="meta-line">Config (hot-reloaded): <code>${esc(snap.providers_file)}</code></div>` : '';
+      html += provs.map((p) => {
+        const limitLabel = p.max_concurrency > 0 ? `${p.active_slots} / ${p.max_concurrency}` : `${p.active_slots} / unlimited`;
+        const pct = p.max_concurrency > 0 ? Math.min(100, Math.round((p.active_slots / p.max_concurrency) * 100)) : (p.active_slots > 0 ? 35 : 0);
+        return `
+          <div class="prov-card">
+            <div class="node-head">
+              <span class="node-id">${esc(p.name)}</span>
+              <span class="badge ext">${esc(p.wire_protocol)}</span>
+              <span class="badge ${p.active_slots > 0 ? 'working' : 'idle'}">slots: ${esc(limitLabel)}</span>
+              <span class="badge">scope: ${esc(p.concurrency_scope)}</span>
+            </div>
+            <div class="meta-line" style="margin-bottom:4px">${esc(p.url)}</div>
+            <div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div>
+            ${p.models && p.models.length ? `<div class="chips">${p.models.map((m) => `<span class="chip">${esc(m)}</span>`).join('')}</div>` : ''}
+          </div>`;
+      }).join('');
+      if (pools.length) {
+        html += `<div class="section-label">Model Pools</div>`;
+        html += pools.map((pl) => `
+          <div class="prov-card">
+            <div class="node-head"><span class="node-id">pool:${esc(pl.name)}</span></div>
+            <div class="chips">${(pl.entries || []).map((e) => `<span class="chip">${esc(e)}</span>`).join('')}</div>
+          </div>`).join('');
+      }
+      app.innerHTML = html;
+    }
+  }
+
+  function bindTreeEvents(treeId) {
+    document.querySelectorAll('[data-fold]').forEach((b) => {
+      b.onclick = () => {
+        const id = b.dataset.fold;
+        if (state.collapsed.has(id)) state.collapsed.delete(id);
+        else state.collapsed.add(id);
+        render();
+      };
+    });
+    document.querySelectorAll('[data-open-conv]').forEach((b) => {
+      b.onclick = () => openConv(b.dataset.openConv);
+    });
+    document.querySelectorAll('[data-log]').forEach((b) => {
+      b.onclick = async () => {
+        const nid = b.dataset.log;
+        openDrawer(`Logs — ${nid}`, 'Loading...');
+        try {
+          const res = await apiGet(`/api/node-log?treeId=${encodeURIComponent(treeId)}&nodeId=${encodeURIComponent(nid)}`);
+          const text = (res.lines || []).join('\n') || '(empty log)';
+          openDrawer(`Logs — ${nid} (${res.source})`, text);
+        } catch (err) {
+          openDrawer(`Logs — ${nid}`, 'Error: ' + err.message);
+        }
+      };
+    });
+    document.querySelectorAll('[data-art-file]').forEach((b) => {
+      b.onclick = async () => {
+        const nid = b.dataset.artNode;
+        const file = b.dataset.artFile;
+        openDrawer(`${nid} / ${file}`, 'Loading...');
+        try {
+          const res = await apiGet(`/api/artifact?treeId=${encodeURIComponent(treeId)}&nodeId=${encodeURIComponent(nid)}&file=${encodeURIComponent(file)}`);
+          openDrawer(`${nid} / ${file}${res.truncated ? ' (truncated)' : ''}`, res.content || '(empty)');
+        } catch (err) {
+          openDrawer(`${nid} / ${file}`, 'Error: ' + err.message);
+        }
+      };
+    });
+    document.querySelectorAll('[data-act]').forEach((b) => {
+      b.onclick = async () => {
+        const action = b.dataset.act;
+        const nid = b.dataset.node;
+        try {
+          await apiPost('/api/action', { action, treeId, nodeId: nid, cascade: true });
+          toast(`${action} ${nid} done`);
+          refresh();
+        } catch (err) {
+          toast(`Failed: ${err.message}`);
+        }
+      };
+    });
+  }
+
+  let inFlight = false;
+  async function refresh() {
+    if (inFlight) return;
+    if (document.hidden || window.innerWidth === 0 || window.innerHeight === 0) return;
+    inFlight = true;
+    try {
+      const qs = new URLSearchParams();
+      const cid = currentConvId();
+      if (cid) qs.set('conversationId', cid);
+      if (state.selectedTreeId) qs.set('treeId', state.selectedTreeId);
+      state.snap = await apiGet('/api/snapshot?' + qs.toString());
+      render();
+    } catch (err) {
+      $('meta-line').textContent = 'Connection error: ' + err.message;
+    } finally {
+      inFlight = false;
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 2000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+})();
+</script>
+</body>
+</html>
