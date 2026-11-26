@@ -18,7 +18,7 @@
 
 环境要求：Go >= 1.22（CLI 环境建议安装 Node.js；Antigravity 桌面客户端在缺少系统 `node` 时会自动回退至内置 `agy-node` 或 `PATH` 中的 `bswarm`）。
 
-> 提示：安装并启用本插件前，建议先关闭原有的原版 swarm 插件（可执行 `agy plugin list` 查看名称，并通过 `agy plugin disable <plugin-name>` 禁用，同时注意清理或覆盖 `PATH` 中旧的 `bswarm` 软链接），避免技能触发、钩子拦截或同名命令发生冲突。
+> 提示：安装并启用本插件前，建议先关闭旧版 `better-swarm` 或其他同名/同类自定义 swarm 插件（可执行 `agy plugin list` 查看名称，并通过 `agy plugin disable <plugin-name>` 禁用，同时注意清理或覆盖 `PATH` 中旧的 `bswarm` 软链接），避免技能触发、钩子拦截或同名命令发生冲突。如需在官方 Swarm UI 面板（`swarm_board`）中查看任务树，请保持 Antigravity 内置的 `swarm` 插件处于启用状态。
 
 ### Antigravity CLI（`agy`）
 

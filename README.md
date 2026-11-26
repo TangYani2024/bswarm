@@ -18,7 +18,7 @@ English | [简体中文](README.zh-CN.md)
 
 Requires Go >= 1.22 (and Node.js for CLI installations; Antigravity Desktop falls back to its bundled `agy-node` or `bswarm` on `PATH`).
 
-> Recommendation: Before enabling this plugin, disable any previously installed original swarm plugin (run `agy plugin list` and `agy plugin disable <plugin-name>`, and replace any old `bswarm` symlink on `PATH`) to prevent skill, hook, or command conflicts.
+> Recommendation: Before enabling this plugin, disable any previously installed legacy `better-swarm` or conflicting custom swarm plugin (run `agy plugin list` and `agy plugin disable <plugin-name>`, and replace any old `bswarm` symlink on `PATH`) to prevent skill, hook, or command conflicts. Keep Antigravity's built-in `swarm` plugin enabled if you want to view `bswarm` trees in the official Swarm UI board (`swarm_board` sidecar).
 
 ### Antigravity CLI (`agy`)
 
