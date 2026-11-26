@@ -102,6 +102,9 @@ func RunDesktopLSTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 	if isoHome == "" {
 		isoHome = envValue(opts.Env, "HOME")
 	}
+	if isoHome == "" {
+		isoHome = envValue(opts.Env, "USERPROFILE")
+	}
 
 	if err := os.MkdirAll(filepath.Dir(opts.LogPath), 0o755); err != nil {
 		outcome.ExitErr = err
@@ -129,6 +132,9 @@ func RunDesktopLSTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 		"--app_data_dir", "antigravity",
 		"--http_server_port", strconv.Itoa(port),
 		"--https_server_port", "0",
+	}
+	if isoHome != "" {
+		lsArgs = append(lsArgs, "--gemini_dir", filepath.Join(isoHome, ".gemini"))
 	}
 	if strings.TrimSpace(opts.WorkDir) != "" {
 		lsArgs = append(lsArgs, "--workspace_id", strings.TrimSpace(opts.WorkDir))

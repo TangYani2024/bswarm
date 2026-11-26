@@ -265,6 +265,8 @@ func PrepareIsolatedHome(isoHome, workspacePath, artifactsDir, storeRoot, plugin
 	}
 
 	// Mount bswarm plugin into isolated HOME so PreToolUse (--owns) & Stop hooks fire.
+	// On Windows without Developer Mode, directory symlinks fail with privilege errors,
+	// so fall back to copying the lightweight plugin manifest + hooks launcher files.
 	mountedPluginName := ""
 	if strings.TrimSpace(pluginDir) != "" {
 		plugParent := filepath.Join(isoHome, ".gemini", "config", "plugins")
@@ -272,7 +274,9 @@ func PrepareIsolatedHome(isoHome, workspacePath, artifactsDir, storeRoot, plugin
 			mountedPluginName = filepath.Base(pluginDir)
 			dst := filepath.Join(plugParent, mountedPluginName)
 			if _, lerr := os.Lstat(dst); os.IsNotExist(lerr) {
-				_ = os.Symlink(pluginDir, dst)
+				if serr := os.Symlink(pluginDir, dst); serr != nil {
+					_ = copyPluginHooksDir(pluginDir, dst)
+				}
 			}
 		}
 	}
@@ -339,11 +343,13 @@ func BuildAgyEnv(baseEnv []string, isoHome, storeRoot, treeID, nodeID, bswarmBin
 			continue
 		}
 		k := kv[:eq]
+		ku := strings.ToUpper(k)
 		if k == "HOME" ||
-			strings.HasPrefix(k, "ANTIGRAVITY_") ||
-			strings.HasPrefix(k, "AGY_") ||
-			strings.HasPrefix(k, "JETSKI_") ||
-			strings.HasPrefix(k, "BSWARM_") {
+			ku == "USERPROFILE" ||
+			strings.HasPrefix(ku, "ANTIGRAVITY_") ||
+			strings.HasPrefix(ku, "AGY_") ||
+			strings.HasPrefix(ku, "JETSKI_") ||
+			strings.HasPrefix(ku, "BSWARM_") {
 			continue
 		}
 		filtered = append(filtered, kv)
@@ -352,6 +358,7 @@ func BuildAgyEnv(baseEnv []string, isoHome, storeRoot, treeID, nodeID, bswarmBin
 	models := uniqueNonEmpty(append([]string{model}, spec.Models...)...)
 	filtered = append(filtered,
 		"HOME="+isoHome,
+		"USERPROFILE="+isoHome,
 		"BSWARM_DATA_DIR="+storeRoot,
 		"BSWARM_TREE_ID="+treeID,
 		"BSWARM_NODE_ID="+nodeID,
@@ -697,4 +704,22 @@ func uniqueNonEmpty(items ...string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func copyPluginHooksDir(srcDir, dstDir string) error {
+	for _, rel := range []string{"plugin.json", "hooks.json", filepath.Join("scripts", "hook.mjs")} {
+		src := filepath.Join(srcDir, rel)
+		raw, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		dst := filepath.Join(dstDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, raw, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
