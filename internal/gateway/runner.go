@@ -58,19 +58,21 @@ type WorkerBackend struct {
 
 // TurnOpts configures one headless external gateway worker turn.
 type TurnOpts struct {
-	AgyBin          string
-	IsoHome         string
-	WorkDir         string
-	Env             []string
-	Model           string
-	ConvID          string
-	Mode            string
-	Timeout         time.Duration
-	IdleTimeout     time.Duration
-	ErrorStallGrace time.Duration
-	Prompt          string
-	LogPath         string
-	OnConvID        func(string)
+	AgyBin               string
+	IsoHome              string
+	HostAppDataDir       string
+	MirrorTranscriptPath string
+	WorkDir              string
+	Env                  []string
+	Model                string
+	ConvID               string
+	Mode                 string
+	Timeout              time.Duration
+	IdleTimeout          time.Duration
+	ErrorStallGrace      time.Duration
+	Prompt               string
+	LogPath              string
+	OnConvID             func(string)
 }
 
 // isLanguageServerBinary detects Desktop's bundled language_server binary, which supports
@@ -458,29 +460,39 @@ func RunAgyTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 	cmd.Env = opts.Env
 	setProcessGroup(cmd)
 
+	outcome := TurnOutcome{ConversationID: opts.ConvID}
+	mirror := newTranscriptMirror(opts.HostAppDataDir, opts.MirrorTranscriptPath, opts.ConvID)
+	failEarly := func(err error) TurnOutcome {
+		out := TurnOutcome{ConversationID: opts.ConvID, ExitErr: err}
+		mirror.Finish(out)
+		return out
+	}
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return TurnOutcome{ExitErr: err}
+		return failEarly(err)
 	}
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &limitedWriter{w: &stderrBuf, limit: 8192}
 
 	if err := os.MkdirAll(filepath.Dir(opts.LogPath), 0o755); err != nil {
-		return TurnOutcome{ExitErr: err}
+		return failEarly(err)
 	}
 	logFile, err := os.OpenFile(opts.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return TurnOutcome{ExitErr: err}
+		return failEarly(err)
 	}
 	defer logFile.Close()
 
 	if err := cmd.Start(); err != nil {
-		return TurnOutcome{ExitErr: err}
+		return failEarly(err)
+	}
+	if strings.TrimSpace(opts.ConvID) != "" {
+		mirror.WriteUserInput(opts.Prompt)
 	}
 
 	var (
 		mu              sync.Mutex
-		outcome         = TurnOutcome{ConversationID: opts.ConvID}
 		lastEventAt     = time.Now()
 		errorStepAt     time.Time
 		earlyStopReason string
@@ -501,7 +513,8 @@ func RunAgyTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 
 			mu.Lock()
 			lastEventAt = now
-			evKind := parseStreamLine(line, &outcome, opts.OnConvID)
+			evKind, step := parseStreamLine(line, &outcome, opts.OnConvID)
+			curConvID := outcome.ConversationID
 			switch evKind {
 			case streamEventErrorStep:
 				if errorStepAt.IsZero() {
@@ -511,6 +524,14 @@ func RunAgyTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 				errorStepAt = time.Time{}
 			}
 			mu.Unlock()
+
+			if curConvID != "" {
+				mirror.SetConvID(curConvID)
+				mirror.WriteUserInput(opts.Prompt)
+			}
+			if step != nil {
+				mirror.WriteStreamStep(step.stepType, step.state, step.errText, step.toolName, step.summary)
+			}
 		}
 	}()
 
@@ -585,6 +606,8 @@ func RunAgyTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 	}
 	res := outcome
 	mu.Unlock()
+	mirror.SetConvID(res.ConversationID)
+	mirror.Finish(res)
 	return res
 }
 
@@ -596,7 +619,15 @@ const (
 	streamEventErrorStep
 )
 
-func parseStreamLine(line []byte, outcome *TurnOutcome, onConvID func(string)) streamEventKind {
+type parsedStreamStep struct {
+	stepType string
+	state    string
+	errText  string
+	toolName string
+	summary  string
+}
+
+func parseStreamLine(line []byte, outcome *TurnOutcome, onConvID func(string)) (streamEventKind, *parsedStreamStep) {
 	var ev struct {
 		Event          string `json:"event"`
 		ConversationID string `json:"conversation_id"`
@@ -605,6 +636,11 @@ func parseStreamLine(line []byte, outcome *TurnOutcome, onConvID func(string)) s
 			StepType       string `json:"step_type"`
 			State          string `json:"state"`
 			Error          string `json:"error"`
+			ToolName       string `json:"tool_name"`
+			ToolSummary    string `json:"tool_summary"`
+			Summary        string `json:"summary"`
+			Content        string `json:"content"`
+			Thinking       string `json:"thinking"`
 		} `json:"step_update"`
 		Result *struct {
 			ConversationID string `json:"conversation_id"`
@@ -618,7 +654,7 @@ func parseStreamLine(line []byte, outcome *TurnOutcome, onConvID func(string)) s
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(line, &ev); err != nil {
-		return streamEventNeutral
+		return streamEventNeutral, nil
 	}
 	if cid := strings.TrimSpace(ev.ConversationID); cid != "" && outcome.ConversationID != cid {
 		outcome.ConversationID = cid
@@ -633,13 +669,26 @@ func parseStreamLine(line []byte, outcome *TurnOutcome, onConvID func(string)) s
 				onConvID(cid)
 			}
 		}
+		summary := firstNonEmpty(
+			ev.StepUpdate.ToolSummary,
+			ev.StepUpdate.Summary,
+			ev.StepUpdate.Thinking,
+			ev.StepUpdate.Content,
+		)
+		step := &parsedStreamStep{
+			stepType: ev.StepUpdate.StepType,
+			state:    ev.StepUpdate.State,
+			errText:  ev.StepUpdate.Error,
+			toolName: ev.StepUpdate.ToolName,
+			summary:  summary,
+		}
 		if strings.EqualFold(ev.StepUpdate.StepType, "error_message") {
 			if msg := strings.TrimSpace(ev.StepUpdate.Error); msg != "" && outcome.ResultError == "" {
 				outcome.ResultError = msg
 			}
-			return streamEventErrorStep
+			return streamEventErrorStep, step
 		}
-		return streamEventProgress
+		return streamEventProgress, step
 	}
 	if ev.Event == "result" && ev.Result != nil {
 		if cid := strings.TrimSpace(ev.Result.ConversationID); cid != "" && outcome.ConversationID != cid {
@@ -663,9 +712,18 @@ func parseStreamLine(line []byte, outcome *TurnOutcome, onConvID func(string)) s
 				outcome.DeniedActions = append(outcome.DeniedActions, label)
 			}
 		}
-		return streamEventProgress
+		return streamEventProgress, nil
 	}
-	return streamEventNeutral
+	return streamEventNeutral, nil
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 type limitedWriter struct {

@@ -1,7 +1,7 @@
 {
   "name": "bswarm",
   "displayName": "bswarm",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "logo": "assets/logo.svg",
   "author": {
     "name": "TangYani2024",
@@ -10,7 +10,7 @@
   "homepage": "https://github.com/TangYani2024/bswarm",
   "repository": "https://github.com/TangYani2024/bswarm",
   "license": "MIT",
-  "description": "Zero-MCP hierarchical multi-agent orchestration plugin for Antigravity with official model support, hot-reloaded external OpenAI/Gemini-compatible API routing, concurrency-aware model pools, private inbox, git worktree isolation, and zero-token watchdog.",
+  "description": "Zero-MCP hierarchical multi-agent orchestration plugin for Antigravity with official Swarm UI integration, hot-reloaded external OpenAI/Gemini-compatible API routing, concurrency-aware model pools, private inbox, git worktree isolation, and zero-token watchdog.",
   "keywords": [
     "antigravity",
     "swarm",

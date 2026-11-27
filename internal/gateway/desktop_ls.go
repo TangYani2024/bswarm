@@ -86,6 +86,11 @@ func RunDesktopLSTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 	defer cancel()
 
 	outcome := TurnOutcome{ConversationID: opts.ConvID}
+	mirror := newTranscriptMirror(opts.HostAppDataDir, opts.MirrorTranscriptPath, opts.ConvID)
+	defer func() {
+		mirror.SetConvID(outcome.ConversationID)
+		mirror.Finish(outcome)
+	}()
 
 	port, err := allocFreeLoopbackPort()
 	if err != nil {
@@ -251,6 +256,8 @@ func RunDesktopLSTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 	if isoHome != "" {
 		trPath = filepath.Join(isoHome, ".gemini", "antigravity", "brain", convID, ".system_generated", "logs", "transcript.jsonl")
 	}
+	mirror.SetSkipPath(trPath)
+	mirror.SetConvID(convID)
 
 	var (
 		trOffset       int64
@@ -298,6 +305,7 @@ func RunDesktopLSTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 					lastActivityAt = now
 					for _, rawLn := range lines {
 						_, _ = logFile.WriteString(rawLn + "\n")
+						mirror.WriteRawLine(rawLn)
 						var st lsTranscriptLine
 						if err := json.Unmarshal([]byte(rawLn), &st); err != nil {
 							continue
@@ -354,6 +362,7 @@ func RunDesktopLSTurn(ctx context.Context, opts TurnOpts) TurnOutcome {
 									trOffset = newOff
 									for _, rawLn := range lines {
 										_, _ = logFile.WriteString(rawLn + "\n")
+										mirror.WriteRawLine(rawLn)
 										var st lsTranscriptLine
 										if json.Unmarshal([]byte(rawLn), &st) == nil && st.Type == "PLANNER_RESPONSE" && strings.TrimSpace(st.Content) != "" {
 											outcome.Response = strings.TrimSpace(st.Content)

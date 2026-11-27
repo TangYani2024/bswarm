@@ -1,6 +1,8 @@
 package uimirror
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -40,7 +42,41 @@ func MemberName(nodeID string) string {
 	return strings.ToLower(out)
 }
 
-func resolveAppDataDir(t *store.Tree) string {
+// ChannelName maps a branch node ID to a valid official Swarm UI channel name
+// matching ^[a-z][a-z0-9-]{0,23}$ and avoiding reserved names "main", "all", "here".
+func ChannelName(nodeID string) string {
+	s := strings.ToLower(strings.TrimSpace(nodeID))
+	s = strings.ReplaceAll(s, "/", "-")
+	s = strings.ReplaceAll(s, "\\", "-")
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash && b.Len() > 0 {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		out = "s-node"
+	} else if out[0] < 'a' || out[0] > 'z' || out == "main" || out == "all" || out == "here" {
+		out = "s-" + out
+	}
+	if len(out) > 24 {
+		out = out[:24]
+	}
+	out = strings.TrimRight(out, "-")
+	if out == "" {
+		return "s-node"
+	}
+	return out
+}
+
+// ResolveAppDataDir resolves the host Antigravity app data dir owning tree t's root conversation.
+func ResolveAppDataDir(t *store.Tree) string {
 	if t != nil && strings.TrimSpace(t.AppDataDir) != "" {
 		return strings.TrimSpace(t.AppDataDir)
 	}
@@ -67,6 +103,16 @@ func resolveAppDataDir(t *store.Tree) string {
 	return filepath.Join(home, ".gemini", "antigravity-cli")
 }
 
+// HostTranscriptPath returns the host Antigravity compact transcript path watched by official swarm_board.
+func HostTranscriptPath(appDataDir, convID string) string {
+	appDataDir = strings.TrimSpace(appDataDir)
+	convID = strings.TrimSpace(convID)
+	if appDataDir == "" || convID == "" {
+		return ""
+	}
+	return filepath.Join(appDataDir, "brain", convID, ".system_generated", "logs", "transcript.jsonl")
+}
+
 // SwarmDir returns the official Antigravity Swarm UI directory for tree t's root conversation.
 func SwarmDir(t *store.Tree) string {
 	if os.Getenv("BSWARM_NO_UI_MIRROR") == "1" || t == nil {
@@ -76,7 +122,7 @@ func SwarmDir(t *store.Tree) string {
 	if root == nil || strings.TrimSpace(root.ConversationID) == "" {
 		return ""
 	}
-	appData := resolveAppDataDir(t)
+	appData := ResolveAppDataDir(t)
 	if appData == "" {
 		return ""
 	}
@@ -111,15 +157,16 @@ func ensureMirrorDir(dir string) error {
 }
 
 type officialMember struct {
-	ConversationID string `json:"conversation_id"`
-	Role           string `json:"role"`
-	Model          string `json:"model,omitempty"`
-	WakeMode       string `json:"wake_mode"`
-	WaitSince      int    `json:"wait_since"`
-	LastReadSeq    int    `json:"last_read_seq"`
-	Killed         bool   `json:"killed"`
-	WorkspaceMode  string `json:"workspace_mode,omitempty"`
-	Workspace      string `json:"workspace,omitempty"`
+	ConversationID string   `json:"conversation_id"`
+	Role           string   `json:"role"`
+	Model          string   `json:"model,omitempty"`
+	WakeMode       string   `json:"wake_mode"`
+	WaitSince      int      `json:"wait_since"`
+	LastReadSeq    int      `json:"last_read_seq"`
+	Killed         bool     `json:"killed"`
+	WorkspaceMode  string   `json:"workspace_mode,omitempty"`
+	Workspace      string   `json:"workspace,omitempty"`
+	Channels       []string `json:"channels,omitempty"`
 }
 
 type officialRoster struct {
@@ -145,14 +192,22 @@ type planThread struct {
 	Tasks []string `json:"tasks"`
 }
 
-type officialBoardMsg struct {
-	Seq   int    `json:"seq"`
-	Agent string `json:"agent"`
-	Text  string `json:"text"`
-	Time  string `json:"time"`
+type boardControl struct {
+	Op      string `json:"op"`
+	Channel string `json:"channel,omitempty"`
+	Topic   string `json:"topic,omitempty"`
 }
 
-// SyncRosterAndPlan writes members.json and plan.json for the official Swarm UI (CLI TUI + Desktop pane).
+type officialBoardMsg struct {
+	Seq     int           `json:"seq"`
+	Agent   string        `json:"agent"`
+	Channel string        `json:"channel,omitempty"`
+	Text    string        `json:"text"`
+	Time    string        `json:"time"`
+	Control *boardControl `json:"control,omitempty"`
+}
+
+// SyncRosterAndPlan writes members.json, plan.json, view.json, and view.html for the official Swarm UI.
 // Best-effort: UI projection errors never fail core bswarm operations.
 func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 	dir := SwarmDir(t)
@@ -163,9 +218,10 @@ func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 		return err
 	}
 
+	branchCh := branchChannels(t)
 	roster := officialRoster{
 		Title:   t.Goal,
-		Members: make(map[string]officialMember, len(t.Nodes)),
+		Members: make(map[string]officialMember, len(t.Nodes)+1),
 	}
 	if roster.Title == "" {
 		roster.Title = "bswarm " + t.ID
@@ -179,12 +235,16 @@ func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 		Tasks: map[string]string{},
 	}
 
-	// Active nodes.
 	activeIDs := make([]string, 0, len(t.Nodes))
 	for id := range t.Nodes {
 		activeIDs = append(activeIDs, id)
 	}
 	sort.Strings(activeIDs)
+
+	rootConv := ""
+	if root := t.Nodes["root"]; root != nil {
+		rootConv = root.ConversationID
+	}
 
 	for _, id := range activeIDs {
 		n := t.Nodes[id]
@@ -201,6 +261,13 @@ func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 		if n.WorkspaceMode == store.WorkspaceWorktree {
 			wsMode = "branch"
 		}
+		var channels []string
+		if n.IsRoot() {
+			channels = []string{"*"}
+		} else if ch, ok := branchCh[topBranchOf(t, n)]; ok {
+			channels = []string{ch}
+		}
+
 		roster.Members[mName] = officialMember{
 			ConversationID: n.ConversationID,
 			Role:           role,
@@ -211,16 +278,29 @@ func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 			Killed:         false,
 			WorkspaceMode:  wsMode,
 			Workspace:      n.WorkspacePath,
+			Channels:       channels,
 		}
 		if !n.IsRoot() {
 			desc := n.Role
 			if n.CurrentTaskID != "" {
 				if tk, ok := t.Tasks[n.CurrentTaskID]; ok && tk.Goal != "" {
-					desc = shortTitle(tk.Goal, 72)
+					desc = tk.Goal
 				}
 			}
-			plan.Tasks[mName] = desc
+			plan.Tasks[mName] = shortTitle(fmt.Sprintf("[L%d][%s] %s", n.Depth, nodeProviderTag(n), desc), 96)
 		}
+	}
+
+	// Virtual narrator keeps official Overview active even when enable-swarm-overview is off.
+	roster.Members["bswarm-narrator"] = officialMember{
+		ConversationID: rootConv,
+		Role:           "narrator",
+		Model:          "bswarm-mirror",
+		WakeMode:       "mentions",
+		WaitSince:      t.MirrorSeq,
+		LastReadSeq:    t.MirrorSeq,
+		Killed:         false,
+		Channels:       []string{"*"},
 	}
 
 	// Include up to maxArchivedShown latest archived nodes as killed=true so user can inspect recent history
@@ -237,6 +317,10 @@ func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 			if _, exists := roster.Members[mName]; exists {
 				continue
 			}
+			var channels []string
+			if ch, ok := branchCh[topBranchOf(t, r.Node)]; ok {
+				channels = []string{ch}
+			}
 			roster.Members[mName] = officialMember{
 				ConversationID: r.Node.ConversationID,
 				Role:           "worker",
@@ -245,38 +329,27 @@ func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 				LastReadSeq:    t.MirrorSeq,
 				Killed:         true,
 				Workspace:      r.Node.WorkspacePath,
+				Channels:       channels,
 			}
 			shown++
 		}
 	}
 
-	// Group active non-root nodes into threads by depth-1 subtree root.
+	// Group active non-root nodes into threads by depth-1 subtree root in hierarchical DFS order.
 	threadMembers := map[string][]string{}
 	threadOrder := []string{}
-	for _, id := range activeIDs {
-		n := t.Nodes[id]
-		if n.IsRoot() {
-			continue
-		}
+	for _, n := range orderedNonRootNodes(t) {
 		top := topBranchOf(t, n)
 		if _, ok := threadMembers[top]; !ok {
 			threadOrder = append(threadOrder, top)
 		}
 		threadMembers[top] = append(threadMembers[top], MemberName(n.ID))
 	}
-	sort.Strings(threadOrder)
 	for _, topID := range threadOrder {
-		topNode := t.Nodes[topID]
-		tGoal := topID
-		if topNode != nil && topNode.CurrentTaskID != "" {
-			if tk, ok := t.Tasks[topNode.CurrentTaskID]; ok && tk.Goal != "" {
-				tGoal = shortTitle(tk.Goal, 72)
-			}
-		}
 		plan.Threads = append(plan.Threads, planThread{
 			ID:    "t-" + MemberName(topID),
 			Title: MemberName(topID),
-			Goal:  tGoal,
+			Goal:  branchTopic(t, topID),
 			Tasks: threadMembers[topID],
 		})
 	}
@@ -297,6 +370,10 @@ func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 		return err
 	}
 
+	if err := syncViewFiles(dir, t); err != nil {
+		return err
+	}
+
 	// Ensure board.jsonl exists so both CLI live watcher and desktop sidecar detect the swarm immediately.
 	boardPath := filepath.Join(dir, "board.jsonl")
 	if _, err := os.Stat(boardPath); os.IsNotExist(err) {
@@ -305,7 +382,8 @@ func SyncRosterAndPlan(st *store.Store, t *store.Tree) error {
 	return nil
 }
 
-// AppendEvent appends a single compact UI-only event line to board.jsonl using seq.
+// AppendEvent appends a single compact UI-only event line to board.jsonl using seq,
+// emitting a channel create control line first when routing into a new subtree channel.
 func AppendEvent(t *store.Tree, seq int, fromNodeID, toNodeID, kind, taskID, summary, artifact string) error {
 	dir := SwarmDir(t)
 	if !canWriteDir(dir) {
@@ -314,14 +392,149 @@ func AppendEvent(t *store.Tree, seq int, fromNodeID, toNodeID, kind, taskID, sum
 	if err := ensureMirrorDir(dir); err != nil {
 		return err
 	}
-	fromName := MemberName(fromNodeID)
-	toName := ""
-	if toNodeID != "" {
-		toName = MemberName(toNodeID)
+
+	boardPath := filepath.Join(dir, "board.jsonl")
+	created, lastSeq := readBoardState(boardPath)
+	nextSeq := seq
+	if nextSeq <= lastSeq {
+		nextSeq = lastSeq + 1
 	}
+
+	branchCh := branchChannels(t)
+	ch, topic := resolveEventChannel(t, branchCh, fromNodeID, toNodeID)
+	nowStr := time.Now().Format("2006-01-02 15:04:05")
+
+	var buf bytes.Buffer
+	if ch != "" && !created[ch] {
+		ctrlLine, err := json.Marshal(makeCreateControlMsg(nextSeq, ch, topic, nowStr))
+		if err != nil {
+			return err
+		}
+		buf.Write(ctrlLine)
+		buf.WriteByte('\n')
+		nextSeq++
+	}
+
+	msg := officialBoardMsg{
+		Seq:     nextSeq,
+		Agent:   MemberName(fromNodeID),
+		Channel: ch,
+		Text:    formatBoardText(toNodeID, kind, taskID, summary, artifact),
+		Time:    nowStr,
+	}
+	line, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	buf.Write(line)
+	buf.WriteByte('\n')
+
+	if t != nil && nextSeq > t.MirrorSeq {
+		t.MirrorSeq = nextSeq
+	}
+
+	f, err := os.OpenFile(boardPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(buf.Bytes())
+	return err
+}
+
+// RebuildBoard backfills board.jsonl from current active tasks & refreshes UI mirror files.
+func RebuildBoard(st *store.Store, t *store.Tree) error {
+	dir := SwarmDir(t)
+	if !canWriteDir(dir) {
+		return nil
+	}
+	if err := ensureMirrorDir(dir); err != nil {
+		return err
+	}
+	type ev struct {
+		at       time.Time
+		order    int
+		from, to string
+		kind     string
+		taskID   string
+		summary  string
+		artifact string
+	}
+	var evs []ev
+	for _, tk := range t.Tasks {
+		evs = append(evs, ev{
+			at:       tk.CreatedAt,
+			order:    0,
+			from:     tk.CreatedBy,
+			to:       tk.AssigneeID,
+			kind:     "assign",
+			taskID:   tk.ID,
+			summary:  tk.Goal,
+			artifact: tk.SpecFile,
+		})
+		if tk.State == store.TaskDone || tk.State == store.TaskFailed {
+			evs = append(evs, ev{
+				at:       tk.UpdatedAt,
+				order:    1,
+				from:     tk.AssigneeID,
+				to:       tk.CreatedBy,
+				kind:     string(tk.State),
+				taskID:   tk.ID,
+				summary:  tk.Summary,
+				artifact: tk.Artifact,
+			})
+		}
+	}
+	sort.SliceStable(evs, func(i, j int) bool {
+		if !evs[i].at.Equal(evs[j].at) {
+			return evs[i].at.Before(evs[j].at)
+		}
+		if evs[i].taskID != evs[j].taskID {
+			return evs[i].taskID < evs[j].taskID
+		}
+		return evs[i].order < evs[j].order
+	})
+
+	branchCh := branchChannels(t)
+	created := map[string]bool{}
+	var buf bytes.Buffer
+	seq := 0
+	for _, e := range evs {
+		tm := e.at
+		if tm.IsZero() {
+			tm = time.Now()
+		}
+		ts := tm.Local().Format("2006-01-02 15:04:05")
+		ch, topic := resolveEventChannel(t, branchCh, e.from, e.to)
+		if ch != "" && !created[ch] {
+			seq++
+			ctrlLine, _ := json.Marshal(makeCreateControlMsg(seq, ch, topic, ts))
+			buf.Write(ctrlLine)
+			buf.WriteByte('\n')
+			created[ch] = true
+		}
+		seq++
+		line, _ := json.Marshal(officialBoardMsg{
+			Seq:     seq,
+			Agent:   MemberName(e.from),
+			Channel: ch,
+			Text:    formatBoardText(e.to, e.kind, e.taskID, e.summary, e.artifact),
+			Time:    ts,
+		})
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	t.MirrorSeq = seq
+	if err := store.WriteAtomic(filepath.Join(dir, "board.jsonl"), buf.Bytes(), 0o600); err != nil {
+		return err
+	}
+	return SyncRosterAndPlan(st, t)
+}
+
+func formatBoardText(toNodeID, kind, taskID, summary, artifact string) string {
 	var tb strings.Builder
-	if toName != "" {
-		fmt.Fprintf(&tb, "@%s ", toName)
+	if toNodeID != "" {
+		fmt.Fprintf(&tb, "@%s ", MemberName(toNodeID))
 	}
 	switch kind {
 	case "done":
@@ -343,110 +556,145 @@ func AppendEvent(t *store.Tree, seq int, fromNodeID, toNodeID, kind, taskID, sum
 	if artifact != "" {
 		fmt.Fprintf(&tb, "\nArtifact: %s", artifact)
 	}
-
-	msg := officialBoardMsg{
-		Seq:   seq,
-		Agent: fromName,
-		Text:  tb.String(),
-		Time:  time.Now().Format("2006-01-02 15:04:05"),
-	}
-	line, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	line = append(line, '\n')
-	f, err := os.OpenFile(filepath.Join(dir, "board.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(line)
-	return err
+	return tb.String()
 }
 
-// RebuildBoard backfills board.jsonl from current active tasks & private inboxes (used by `bswarm sync-ui`).
-func RebuildBoard(st *store.Store, t *store.Tree) error {
-	dir := SwarmDir(t)
-	if !canWriteDir(dir) {
+func makeCreateControlMsg(seq int, ch, topic, ts string) officialBoardMsg {
+	return officialBoardMsg{
+		Seq:     seq,
+		Agent:   "coordinator",
+		Channel: ch,
+		Text:    "Created #" + ch,
+		Time:    ts,
+		Control: &boardControl{
+			Op:      "create",
+			Channel: ch,
+			Topic:   topic,
+		},
+	}
+}
+
+func readBoardState(boardPath string) (map[string]bool, int) {
+	created := map[string]bool{}
+	lastSeq := 0
+	f, err := os.Open(boardPath)
+	if err != nil {
+		return created, 0
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var msg officialBoardMsg
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			continue
+		}
+		if msg.Seq > lastSeq {
+			lastSeq = msg.Seq
+		}
+		if msg.Control != nil && msg.Control.Op == "create" {
+			ch := msg.Control.Channel
+			if ch == "" {
+				ch = msg.Channel
+			}
+			if ch != "" {
+				created[ch] = true
+			}
+		}
+	}
+	return created, lastSeq
+}
+
+func branchChannels(t *store.Tree) map[string]string {
+	if t == nil {
 		return nil
 	}
-	if err := ensureMirrorDir(dir); err != nil {
-		return err
-	}
-	type ev struct {
-		at       time.Time
-		from, to string
-		kind     string
-		taskID   string
-		summary  string
-		artifact string
-	}
-	var evs []ev
-	// Include active task assignments in chronological order.
-	for _, tk := range t.Tasks {
-		evs = append(evs, ev{
-			at:       tk.CreatedAt,
-			from:     tk.CreatedBy,
-			to:       tk.AssigneeID,
-			kind:     "assign",
-			taskID:   tk.ID,
-			summary:  tk.Goal,
-			artifact: tk.SpecFile,
-		})
-		if tk.State == store.TaskDone || tk.State == store.TaskFailed {
-			parentID := tk.CreatedBy
-			evs = append(evs, ev{
-				at:       tk.UpdatedAt,
-				from:     tk.AssigneeID,
-				to:       parentID,
-				kind:     string(tk.State),
-				taskID:   tk.ID,
-				summary:  tk.Summary,
-				artifact: tk.Artifact,
-			})
+	counts := map[string]int{}
+	hasDeep := map[string]bool{}
+	for _, n := range t.Nodes {
+		if n == nil || n.IsRoot() || !n.IsActive() {
+			continue
+		}
+		top := topBranchOf(t, n)
+		if top == "" || top == "root" {
+			continue
+		}
+		counts[top]++
+		if n.Depth >= 2 {
+			hasDeep[top] = true
 		}
 	}
-	sort.Slice(evs, func(i, j int) bool { return evs[i].at.Before(evs[j].at) })
+	out := map[string]string{}
+	for top, cnt := range counts {
+		if cnt >= 2 || hasDeep[top] {
+			out[top] = ChannelName(top)
+		}
+	}
+	return out
+}
 
-	var buf strings.Builder
-	seq := 0
-	for _, e := range evs {
-		seq++
-		var tb strings.Builder
-		if e.to != "" {
-			fmt.Fprintf(&tb, "@%s ", MemberName(e.to))
+func branchTopic(t *store.Tree, topID string) string {
+	if t != nil {
+		if topNode := t.Nodes[topID]; topNode != nil {
+			if topNode.CurrentTaskID != "" {
+				if tk, ok := t.Tasks[topNode.CurrentTaskID]; ok && tk.Goal != "" {
+					return shortTitle(tk.Goal, 72)
+				}
+			}
+			if topNode.Role != "" {
+				return shortTitle(topNode.Role, 72)
+			}
 		}
-		if e.kind == "done" {
-			tb.WriteString("[done] ")
-		} else {
-			fmt.Fprintf(&tb, "[%s] ", e.kind)
-		}
-		if e.taskID != "" {
-			fmt.Fprintf(&tb, "(%s) ", e.taskID)
-		}
-		s, _ := store.TruncateRunes(strings.TrimSpace(e.summary), store.MaxSummaryRunes)
-		tb.WriteString(s)
-		if e.artifact != "" {
-			fmt.Fprintf(&tb, "\nArtifact: %s", e.artifact)
-		}
-		tm := e.at
-		if tm.IsZero() {
-			tm = time.Now()
-		}
-		line, _ := json.Marshal(officialBoardMsg{
-			Seq:   seq,
-			Agent: MemberName(e.from),
-			Text:  tb.String(),
-			Time:  tm.Local().Format("2006-01-02 15:04:05"),
-		})
-		buf.Write(line)
-		buf.WriteByte('\n')
 	}
-	t.MirrorSeq = seq
-	if err := store.WriteAtomic(filepath.Join(dir, "board.jsonl"), []byte(buf.String()), 0o600); err != nil {
-		return err
+	return shortTitle(topID, 72)
+}
+
+func resolveEventChannel(t *store.Tree, branchCh map[string]string, fromNodeID, toNodeID string) (string, string) {
+	if t == nil || fromNodeID == "" || fromNodeID == "root" || toNodeID == "" || toNodeID == "root" {
+		return "", ""
 	}
-	return SyncRosterAndPlan(st, t)
+	fromNode := t.Nodes[fromNodeID]
+	toNode := t.Nodes[toNodeID]
+	if fromNode != nil && toNode != nil {
+		fromTop := topBranchOf(t, fromNode)
+		toTop := topBranchOf(t, toNode)
+		if fromTop != "" && fromTop != "root" && fromTop == toTop {
+			if ch, ok := branchCh[fromTop]; ok {
+				return ch, branchTopic(t, fromTop)
+			}
+			if fromNode.Depth >= 2 || toNode.Depth >= 2 {
+				return ChannelName(fromTop), branchTopic(t, fromTop)
+			}
+		}
+		return "", ""
+	}
+	if fromNode != nil && fromNode.Depth >= 2 && fromNode.ParentID == toNodeID {
+		top := topBranchOf(t, fromNode)
+		if top != "" && top != "root" {
+			return ChannelName(top), branchTopic(t, top)
+		}
+	}
+	if toNode != nil && toNode.Depth >= 2 && toNode.ParentID == fromNodeID {
+		top := topBranchOf(t, toNode)
+		if top != "" && top != "root" {
+			return ChannelName(top), branchTopic(t, top)
+		}
+	}
+	return "", ""
+}
+
+func nodeProviderTag(n *store.Node) string {
+	if n == nil {
+		return "official"
+	}
+	if strings.TrimSpace(n.Provider) != "" {
+		return strings.TrimSpace(n.Provider)
+	}
+	return "official"
 }
 
 func topBranchOf(t *store.Tree, n *store.Node) string {

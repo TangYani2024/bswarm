@@ -1,9 +1,54 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestVersionAndNoUISidecar(t *testing.T) {
+	if version != "0.5.0" {
+		t.Fatalf("expected version 0.5.0, got %q", version)
+	}
+
+	// Capture printUsage stdout and verify ui-sidecar was removed.
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	printUsage()
+	_ = w.Close()
+	os.Stdout = origStdout
+
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	_ = r.Close()
+	if strings.Contains(buf.String(), "ui-sidecar") {
+		t.Fatalf("printUsage still mentions ui-sidecar:\n%s", buf.String())
+	}
+
+	// Verify plugin.json version matches 0.5.0.
+	raw, err := os.ReadFile(filepath.Join("..", "..", "plugin.json"))
+	if err != nil {
+		t.Fatalf("read plugin.json: %v", err)
+	}
+	var plug struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &plug); err != nil {
+		t.Fatalf("parse plugin.json: %v", err)
+	}
+	if plug.Version != "0.5.0" {
+		t.Fatalf("expected plugin.json version 0.5.0, got %q", plug.Version)
+	}
+}
 
 func TestParseDurationDaysAndReorderFlags(t *testing.T) {
 	if d, err := parseDurationDays("7d"); err != nil || d != 7*24*time.Hour {

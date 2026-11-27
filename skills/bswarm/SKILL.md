@@ -36,11 +36,12 @@ bswarm assign <node_id> --goal "..." [--verify "cmd"]                     # wake
 bswarm done --summary "<=400 chars>" [--artifact <path>]                  # report to direct parent and transition to idle
 bswarm ask <parent|node_id> --summary "..." [--artifact <path>]           # direct parent/child mail (reply via `bswarm reply`)
 bswarm inbox [--all] && bswarm status [--archived]                        # unread private mail and active tree status
+bswarm sync-ui                                                            # refresh official Swarm UI (members.json, plan.json, view.json, view.html, board.jsonl)
 bswarm merge <node_id|all> [--strategy squash] [--verify "cmd"]           # merge worktree branches with rollback protection
 bswarm retire <node_id> --cascade                                         # archive subtree, stop workers, and remove worktrees
 bswarm gc [--native-audit] [--apply --older-than 7d]                      # clean orphan worktrees or native swarm leftovers
 ```
 
 ## Workflow
-1. Split tasks with disjoint `--worktree` or `--owns`, run `spawn`, then end turn until woken. On Antigravity Desktop, include `[bswarm](sidecar://bswarm/bswarm_board/)` in your reply after spawning so the user can open the hierarchical tree board in one click.
+1. Split tasks with disjoint `--worktree` or `--owns`, run `spawn`, then end turn until woken. Users can view the live tree, Hive map, and subtree channels in Antigravity's built-in **Swarm** panel (`+` -> **Swarm**); run `bswarm sync-ui` if a manual UI refresh is needed.
 2. On wake, run `bswarm inbox`, inspect artifacts as needed, then reuse idle nodes or run `merge` and `retire --cascade`.

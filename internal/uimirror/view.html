@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bswarm Overview</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--background,#fff);color:var(--foreground,#111);font-family:var(--font-family,system-ui,-apple-system,sans-serif);font-size:13px;line-height:1.45}
+.wrap{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.card{background:var(--card,#f7f7f8);border:1px solid var(--border,rgba(128,128,128,.22));border-radius:8px;padding:10px 12px}
+.top-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.headline{font-weight:600;font-size:14px;color:var(--foreground,#111)}
+.phase-pill{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--muted,#f1f2f4);border:1px solid var(--border,rgba(128,128,128,.22));color:var(--foreground,#111)}
+.phase-pill.active{color:var(--primary,#2563eb);border-color:var(--primary,#2563eb)}
+.phase-pill.blocked{color:#dc2626;border-color:#dc2626}
+.phase-pill.done{color:#16a34a;border-color:#16a34a}
+.stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.stat{font-size:11px;padding:2px 7px;border-radius:6px;background:var(--muted,#f1f2f4);color:var(--muted-foreground,#666)}
+.stat strong{color:var(--foreground,#111)}
+.subline{margin-top:6px;font-size:12px;color:var(--muted-foreground,#666)}
+.att-banner{border-color:rgba(220,38,38,.45);background:rgba(220,38,38,.06);display:flex;flex-direction:column;gap:6px}
+.att-title{font-weight:600;font-size:12px;color:#dc2626}
+.att-item{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding-top:6px;border-top:1px solid var(--border,rgba(128,128,128,.22))}
+.att-item:first-of-type{border-top:none;padding-top:0}
+.att-why{font-size:12px;color:var(--muted-foreground,#666);margin-top:2px}
+.tree{display:flex;flex-direction:column;gap:4px}
+.root-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border-radius:6px;background:var(--muted,#f1f2f4);border:1px solid var(--border,rgba(128,128,128,.22));font-weight:600;font-size:12px}
+.node-wrap{display:flex;align-items:stretch}
+.guides{display:flex;flex-shrink:0}
+.guide{width:18px;position:relative}
+.guide::before{content:"";position:absolute;left:8px;top:-4px;bottom:-4px;border-left:1px solid var(--border,rgba(128,128,128,.35))}
+.guide.elbow::before{bottom:50%}
+.guide.elbow::after{content:"";position:absolute;left:8px;top:50%;width:10px;border-top:1px solid var(--border,rgba(128,128,128,.35))}
+.node-card{flex:1;min-width:0;padding:7px 10px;border-radius:7px;background:var(--card,#f7f7f8);border:1px solid var(--border,rgba(128,128,128,.22));display:flex;flex-direction:column;gap:4px}
+.node-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.node-id{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#9ca3af}
+.dot.active{background:var(--primary,#2563eb)}
+.dot.done{background:#16a34a}
+.dot.failed{background:#dc2626}
+.dot.blocked{background:#d97706}
+.dot.queued{background:#6b7280}
+.name{font-weight:600;font-size:12.5px;word-break:break-word}
+.pill{font-size:10.5px;padding:1px 6px;border-radius:5px;border:1px solid var(--border,rgba(128,128,128,.22));background:var(--muted,#f1f2f4);color:var(--muted-foreground,#666);white-space:nowrap}
+.pill.official{color:var(--primary,#2563eb);border-color:rgba(37,99,235,.35)}
+.pill.ext{color:#9333ea;border-color:rgba(147,51,234,.35)}
+.pill.owns{font-family:ui-monospace,monospace}
+.pill.blk{color:#d97706;border-color:rgba(217,119,6,.4)}
+.node-summary{font-size:12px;color:var(--muted-foreground,#666);word-break:break-word}
+.actions{display:flex;gap:5px;flex-wrap:wrap}
+.btn{font:inherit;font-size:11px;padding:2px 8px;border-radius:5px;border:1px solid var(--border,rgba(128,128,128,.3));background:var(--background,#fff);color:var(--foreground,#111);cursor:pointer}
+.btn:hover{border-color:var(--primary,#2563eb);color:var(--primary,#2563eb)}
+details.footer summary{cursor:pointer;font-weight:600;font-size:12px;color:var(--muted-foreground,#666)}
+.ms-list{margin:6px 0 0;padding-left:16px;display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted-foreground,#666)}
+.empty{padding:24px;text-align:center;color:var(--muted-foreground,#666)}
+</style>
+</head>
+<body>
+<div id="app" class="wrap"><div class="empty">Waiting for bswarm state...</div></div>
+<script>
+(function(){
+var app=document.getElementById("app");
+function el(t,c,tx){var n=document.createElement(t);if(c)n.className=c;if(tx!=null)n.textContent=String(tx);return n;}
+function parseWS(ws){
+  var title=String(ws.title||ws.id||""),d=1,name=title,role="",dm=title.match(/^\[L(\d+)\]\s*(.+)$/);
+  if(dm){d=parseInt(dm[1],10)||1;name=dm[2];}
+  var rm=name.match(/^(.+?)\s*\(([^()]+)\)\s*$/);
+  if(rm){name=rm[1].trim();role=rm[2].trim();}
+  var parent="",model="",owns="",wait="",rest=[],parts=String(ws.note||"").split("|");
+  for(var i=0;i<parts.length;i++){
+    var p=parts[i].trim();if(!p)continue;
+    if(p.indexOf("parent:")===0)parent=p.slice(7).trim();
+    else if(p.indexOf("depth:")===0)d=parseInt(p.slice(6).trim(),10)||d;
+    else if(p.indexOf("model:")===0)model=p.slice(6).trim();
+    else if(p.indexOf("owns:")===0)owns=p.slice(5).trim();
+    else if(p.indexOf("wait:")===0)wait=p.slice(5).trim();
+    else rest.push(p);
+  }
+  var ext=model.indexOf("ext:")===0,ml=model;
+  if(ext)ml="API: "+model.slice(4);
+  else if(model.indexOf("official/")===0)ml="Official: "+model.slice(9);
+  else if(model==="official")ml="Official";
+  return{depth:d,name:name,role:role,parent:parent,modelLabel:ml,isExt:ext,owns:(owns&&owns!=="-")?owns:"",wait:wait,summary:rest.join(" | ")};
+}
+function actBtns(acts){
+  if(!Array.isArray(acts)||!acts.length)return null;
+  var box=el("div","actions");
+  acts.forEach(function(a){
+    if(!a||!a.type)return;
+    var b=el("button","btn",a.label||a.type);b.type="button";
+    b.addEventListener("click",function(){if(window.narrator&&typeof window.narrator.navigate==="function")window.narrator.navigate(a);});
+    box.appendChild(b);
+  });
+  return box.childNodes.length?box:null;
+}
+function render(view,meta){
+  app.textContent="";
+  if(!view||typeof view!=="object"){app.appendChild(el("div","empty","No active bswarm overview data."));return;}
+  var list=Array.isArray(view.workstreams)?view.workstreams:[],parsed=[],c={active:0,done:0,failed:0,blocked:0,queued:0,official:0,ext:0};
+  for(var i=0;i<list.length;i++){
+    var ws=list[i]||{},info=parseWS(ws),st=String(ws.state||"queued");
+    parsed.push({ws:ws,info:info});
+    c[st]!==undefined?c[st]++:c.queued++;
+    info.isExt?c.ext++:c.official++;
+  }
+  var sc=el("div","card"),hd=el("div","top-head");
+  hd.appendChild(el("div","headline",view.headline||(view.goal&&view.goal.title)||"bswarm Overview"));
+  if(view.phase&&view.phase.label){
+    var lbl=view.phase.label+(view.phase.total>0?" "+view.phase.index+"/"+view.phase.total:"");
+    var lw=String(view.phase.label).toLowerCase(),pc="phase-pill "+(lw.indexOf("block")>=0?"blocked":(lw.indexOf("comp")>=0?"done":"active"));
+    hd.appendChild(el("span",pc,lbl));
+  }
+  sc.appendChild(hd);
+  var stRow=el("div","stats");
+  [["Active",c.active],["Done",c.done],["Failed",c.failed+c.blocked],["Queued",c.queued],["Official",c.official],["External API",c.ext]].forEach(function(p){
+    var sp=el("span","stat");sp.appendChild(document.createTextNode(p[0]+": "));sp.appendChild(el("strong","",p[1]));stRow.appendChild(sp);
+  });
+  sc.appendChild(stRow);
+  if(view.running_summary)sc.appendChild(el("div","subline",view.running_summary));
+  app.appendChild(sc);
+  if(Array.isArray(view.attention)&&view.attention.length){
+    var ac=el("div","card att-banner");ac.appendChild(el("div","att-title","Attention Needed ("+view.attention.length+")"));
+    view.attention.forEach(function(it){
+      if(!it)return;var row=el("div","att-item"),lf=el("div","");
+      lf.appendChild(el("div","name","["+(it.severity||"med")+"/"+(it.kind||"alert")+"] "+(it.title||it.id||"")));
+      if(it.why)lf.appendChild(el("div","att-why",it.why));
+      row.appendChild(lf);var ab=actBtns(it.actions);if(ab)row.appendChild(ab);ac.appendChild(row);
+    });
+    app.appendChild(ac);
+  }
+  var tree=el("div","tree"),rl="L0 coordinator"+(view.goal&&view.goal.title?" — "+view.goal.title:""),rr=el("div","root-row");
+  rr.appendChild(el("span","",rl));
+  var seq=(view.as_of_seq!==undefined)?view.as_of_seq:(meta&&meta.head);
+  if(seq!==undefined)rr.appendChild(el("span","pill","seq "+seq));
+  tree.appendChild(rr);
+  parsed.forEach(function(it){
+    var ws=it.ws,info=it.info,w=el("div","node-wrap"),gs=el("div","guides"),dc=Math.max(1,Math.min(info.depth,5));
+    for(var g=0;g<dc;g++)gs.appendChild(el("div",g===dc-1?"guide elbow":"guide"));
+    w.appendChild(gs);
+    var card=el("div","node-card"),nt=el("div","node-top"),li=el("div","node-id");
+    if(ws.id)card.setAttribute("data-narrator-id",ws.id);
+    li.appendChild(el("span","dot "+(ws.state||"queued")));
+    li.appendChild(el("span","pill","L"+info.depth));
+    li.appendChild(el("span","name",info.name));
+    if(info.role)li.appendChild(el("span","pill",info.role));
+    if(info.modelLabel)li.appendChild(el("span","pill "+(info.isExt?"ext":"official"),info.modelLabel));
+    if(info.owns)li.appendChild(el("span","pill owns",info.owns));
+    var wt=ws.blocked_on||info.wait;
+    if(wt)li.appendChild(el("span","pill blk","waiting: "+wt));
+    nt.appendChild(li);var acts=actBtns(ws.actions);if(acts)nt.appendChild(acts);
+    card.appendChild(nt);if(info.summary)card.appendChild(el("div","node-summary",info.summary));
+    w.appendChild(card);tree.appendChild(w);
+  });
+  app.appendChild(tree);
+  var ms=Array.isArray(view.milestones)?view.milestones:[],rk=Array.isArray(view.risks)?view.risks:[];
+  if(ms.length||rk.length){
+    var det=el("details","card footer");
+    det.appendChild(el("summary","","Milestones ("+ms.length+")"+(rk.length?" & Risks ("+rk.length+")":"")));
+    var ul=el("ul","ms-list");
+    ms.forEach(function(m){ul.appendChild(el("li","",(m&&m.text)||""));});
+    rk.forEach(function(r){ul.appendChild(el("li","","[Risk] "+((r&&r.text)||"")));});
+    det.appendChild(ul);app.appendChild(det);
+  }
+}
+if(window.narrator&&typeof window.narrator.onData==="function"){window.narrator.onData(function(v,m){render(v,m);});}
+})();
+</script>
+</body>
+</html>

@@ -1230,6 +1230,7 @@ func (o *Orchestrator) CompleteGatewayTurn(ctx context.Context, treeID, nodeID, 
 	if err != nil {
 		return err
 	}
+	defer o.mirrorRoster(treeID)
 	if outcome.ConversationID != "" {
 		_ = o.Store.BindConversation(outcome.ConversationID, treeID, nodeID)
 	}

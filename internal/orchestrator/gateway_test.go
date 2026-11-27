@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/TangYani2024/bswarm/internal/gateway"
 	"github.com/TangYani2024/bswarm/internal/provider"
 	"github.com/TangYani2024/bswarm/internal/store"
+	"github.com/TangYani2024/bswarm/internal/uimirror"
 )
 
 func TestExternalGatewayRoutingConcurrencyAndPool(t *testing.T) {
@@ -403,5 +405,94 @@ func TestOfficialModelsWorkWithoutAnyProvidersConfig(t *testing.T) {
 	// Retire cleanly.
 	if _, err := orch.Retire("conv-official-root", tree.ID, "off-gemini", true, false); err != nil {
 		t.Fatalf("official Retire failed: %v", err)
+	}
+}
+
+func TestCompleteGatewayTurnRefreshesUIMirrorAndMultiLevelBoard(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(t.TempDir())
+	appData := t.TempDir()
+	orch := New(st, &mockAPI{}, nil)
+	orch.Providers = &provider.Config{
+		Providers: map[string]*provider.ProviderSpec{
+			"ext": {
+				URL:          "https://api.example.com/v1",
+				WireProtocol: "openai",
+				DefaultModel: "m1",
+			},
+		},
+	}
+	orch.GatewayLaunch = func(req gateway.LaunchRequest) error { return nil }
+
+	tree, _, err := orch.Init(InitOpts{
+		ConversationID: "conv-root-ui",
+		Goal:           "UI mirror check",
+		RepoRoot:       t.TempDir(),
+		AppDataDir:     appData,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// L1 official lead spawns L2 external worker.
+	lead, err := orch.Spawn(ctx, SpawnOpts{
+		CallerConvID: "conv-root-ui",
+		ID:           "lead-a",
+		Role:         "lead",
+		Goal:         "Lead subtree",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w1, err := orch.Spawn(ctx, SpawnOpts{
+		CallerConvID: lead.ConversationID,
+		ID:           "w1",
+		Role:         "coder",
+		Provider:     "ext",
+		Goal:         "Build module",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify board.jsonl attributes L1->L2 assign event to lead-a -> @lead-a-w1.
+	boardPath := filepath.Join(uimirror.SwarmDir(tree), "board.jsonl")
+	bRaw, err := os.ReadFile(boardPath)
+	if err != nil {
+		t.Fatalf("read board.jsonl: %v", err)
+	}
+	if !strings.Contains(string(bRaw), `"agent":"lead-a"`) || !strings.Contains(string(bRaw), "@lead-a-w1") {
+		t.Fatalf("expected L1->L2 board attribution (lead-a -> @lead-a-w1), got:\n%s", string(bRaw))
+	}
+
+	// Simulate worker already called `bswarm done` inside sandbox, then CompleteGatewayTurn runs on host.
+	// Delete members.json first to prove CompleteGatewayTurn refreshes SyncRosterAndPlan even on !needAutoClose!
+	if _, err := orch.Done(ctx, DoneOpts{TreeID: tree.ID, ActorNodeID: w1.NodeID, Summary: "done via cli"}); err != nil {
+		t.Fatal(err)
+	}
+	membersPath := filepath.Join(uimirror.SwarmDir(tree), "members.json")
+	_ = os.Remove(membersPath)
+
+	if err := orch.CompleteGatewayTurn(ctx, tree.ID, w1.NodeID, w1.TaskID, gateway.TurnOutcome{
+		ConversationID: "conv-ext-w1",
+		Status:         "SUCCESS",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mRaw, err := os.ReadFile(membersPath)
+	if err != nil {
+		t.Fatalf("expected CompleteGatewayTurn to refresh members.json: %v", err)
+	}
+	var roster struct {
+		Members map[string]struct {
+			ConversationID string `json:"conversation_id"`
+			WakeMode       string `json:"wake_mode"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(mRaw, &roster); err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := roster.Members["lead-a-w1"]; !ok || m.ConversationID != "conv-ext-w1" || m.WakeMode != "mentions" {
+		t.Fatalf("expected refreshed idle member with bound convID, got %+v", roster.Members["lead-a-w1"])
 	}
 }

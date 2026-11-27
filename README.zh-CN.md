@@ -7,7 +7,7 @@
 ## 核心特性
 
 - **树状多层级编排**：支持 `Root -> Lead -> Worker` 多级任务拆解、严格父子封装、基于 `parentConversationId` 的原生子会话归属（避免左侧顶级对话列表刷屏）与级联回收。
-- **桌面端原生树状 Sidecar 面板**：内置 `sidecars/bswarm_board` 辅助栏视图（`[bswarm](sidecar://bswarm/bswarm_board/)`），直观展示多层级折叠树、DAG 依赖、官方与外部 API 并发槽位、隔离日志、产物预览与节点控制。
+- **深度集成官方 Swarm UI 面板**：直接投影至 Antigravity 内置的 **Swarm** 面板（`swarm_board`），完整呈现多层级树（`L0 -> L1 -> L2 -> L3`）、Hive 蜂巢视图、按子树隔离的 Board 频道，以及官方与外部 API 节点的实时步骤状态。
 - **私有收件箱与按引用传递**：消息摘要自动限制在 400 字符以内，长输出落盘至节点独立产物文件。
 - **热节点复用**：任务完成后节点转为 `idle` 状态，可通过 `--reuse` 或 `assign` 复用上下文，减少冷启动开销。
 - **写入隔离**：支持独立 Git Worktree（`--worktree`）及基于钩子强制校验的路径锁（`--owns`）。
@@ -55,9 +55,22 @@ bswarm spawn --id worker-b --role coder --owns "docs/**" --model gemini-4-hydrog
 bswarm status
 bswarm inbox
 bswarm assign worker-a --goal "Add unit tests for module A"
+bswarm sync-ui
 bswarm merge all --strategy squash --verify "go test ./..."
 bswarm retire worker-a --cascade
 ```
+
+### 官方 Swarm UI 集成
+
+请保持 Antigravity 内置的 `swarm` 插件处于启用状态。点击对话顶部栏的 `+` 菜单并选择 **Swarm** 即可打开面板，面板会自动监听当前活动对话。
+
+`bswarm` 将完整的多代理编排状态直接投影至官方内置 Swarm 面板（`swarm_board`）：
+
+- **Overview 标签页（`view.json` + `view.html`）**：渲染多层级任务树（`L0 -> L1 -> L2 -> L3`）、角色/模型/提供方徽章（区分官方模型与外部 API）、路径所有权范围、异常告警，以及一键操作（打开官方子代理对话、跳转至 Board 帖子或打开产物文件）。
+- **Hive 蜂巢图（`Graph -> Hive`）**：将每个 depth-1 子树映射为一个蜂巢单元，实时展示工作节点、进度环、等待依赖箭头与消息连线。
+- **Board 与子树频道（`#channels`）**：当 depth-1 Lead 派生 depth-2+ 子节点时，自动创建按子树隔离的频道（例如 `#lead-api`），使子树内部协作保持条理，同时根级协调保留在 `#main` 中。
+- **Members 与外部 API 实时活动（`transcript.jsonl` 镜像）**：将隔离运行的外部 API 工作节点（同时支持免装 CLI 的桌面端 `language_server` 与 `agy` CLI 后端）的实时步骤日志镜像写入宿主对话的 `transcript.jsonl`，使外部 API 节点与官方模型一样展示实时步数、活跃状态、工具/思考动态以及错误或配额告警。
+- **原生子代理谱系与整洁侧边栏**：官方模型工作节点通过 ConnectRPC `StartCascade(SUBAGENT, parentConversationId)` 创建，子节点严格归属于父对话之下，不会污染左侧顶级对话列表。
 
 ### 外部 API 提供方（可选，支持热加载）
 
